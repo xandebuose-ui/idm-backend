@@ -1,50 +1,70 @@
 # -*- coding: utf-8 -*-
 """
-IDM Backend — serviço único (FastAPI) que roda o motor da fila:
-  - POLL agendado (a cada POLL_MINUTES, padrão 15) → run_motor → Firestore
-  - WEBHOOK do Clinic Expert (lead/agendamento novo) → run_motor → Firestore (tempo real)
-  - /health p/ monitoramento
-
-Projetado para o IDM crescer: novos jobs entram como novas rotas/agendamentos aqui.
-Segurança: o webhook exige o header X-IDM-Secret == WEBHOOK_SECRET.
+IDM Backend — serviço único (FastAPI):
+  - POLL agendado (a cada POLL_MINUTES, padrão 15) → run_motor → cache + Firestore (se houver)
+  - WEBHOOK do Clinic Expert → roda na hora (tempo real)
+  - /painel  → página web (HTTP Basic Auth) com a FILA DE PRIORIDADE ao vivo
+  - /fila.json → mesma fila em JSON (Basic Auth)
+  - /health  → status público
+Segurança: /painel e /fila.json exigem usuário+senha (PANEL_USER / PANEL_PASS).
+Dado de paciente só aparece atrás dessa autenticação.
 """
-import os, hmac, hashlib, threading
-from fastapi import FastAPI, Request, Header, HTTPException
+import os, hmac, threading, secrets, html, datetime as dt
+from fastapi import FastAPI, Request, Header, HTTPException, Depends
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from motor_fila import run_motor
+from motor_fila import run_motor, FECHADO
 from firebase_writer import push_fila
 
 POLL_MINUTES = int(os.environ.get("POLL_MINUTES", "15"))
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
+PANEL_USER = os.environ.get("PANEL_USER", "")
+PANEL_PASS = os.environ.get("PANEL_PASS", "")
 
-app = FastAPI(title="IDM Backend", version="1.0")
+app = FastAPI(title="IDM Backend", version="1.1")
+security = HTTPBasic()
 _lock = threading.Lock()
+_last = {"result": None, "quando": None}
 
 def _rodar(motivo: str):
-    # trava p/ não rodar duas vezes em paralelo (webhook + poll ao mesmo tempo)
     if not _lock.acquire(blocking=False):
-        print(f"[run] ({motivo}) já há uma execução em curso — ignorado")
         return {"status": "busy"}
     try:
         res = run_motor()
-        ok = push_fila(res)
-        print(f"[run] ({motivo}) {res['total_leads_pipeline']} leads | resumo {res['resumo']} | firestore={ok}")
-        return {"status": "ok", "total": res["total_leads_pipeline"], "resumo": res["resumo"], "firestore": ok}
+        _last["result"] = res
+        _last["quando"] = dt.datetime.now().isoformat(timespec="seconds")
+        ok = push_fila(res)  # grava no Firestore se as credenciais existirem; senão ignora
+        print(f"[run] ({motivo}) {res['total_leads_pipeline']} leads | {res['resumo']} | firestore={ok}")
+        return {"status": "ok", "total": res["total_leads_pipeline"], "resumo": res["resumo"]}
     finally:
         _lock.release()
 
 @app.on_event("startup")
 def _startup():
     sched = BackgroundScheduler(timezone="America/Sao_Paulo")
-    sched.add_job(lambda: _rodar("poll"), "interval", minutes=POLL_MINUTES,
-                  next_run_time=None)  # 1ª execução no 1º intervalo; use /run para rodar já
+    sched.add_job(lambda: _rodar("poll"), "interval", minutes=POLL_MINUTES)
     sched.start()
     print(f"[startup] poll a cada {POLL_MINUTES} min ligado")
 
+def _auth(cred: HTTPBasicCredentials = Depends(security)):
+    ok_u = PANEL_USER and hmac.compare_digest(cred.username, PANEL_USER)
+    ok_p = PANEL_PASS and hmac.compare_digest(cred.password, PANEL_PASS)
+    if not (ok_u and ok_p):
+        raise HTTPException(status_code=401, detail="unauthorized",
+                            headers={"WWW-Authenticate": "Basic"})
+    return True
+
+def _get_result():
+    if _last["result"] is None:
+        _rodar("primeira-carga")
+    return _last["result"], _last["quando"]
+
 @app.get("/health")
 def health():
-    return {"status": "up", "poll_minutes": POLL_MINUTES}
+    return {"status": "up", "poll_minutes": POLL_MINUTES,
+            "tem_fila": _last["result"] is not None, "ultima_rodada": _last["quando"]}
 
 @app.post("/run")
 def run_now(x_idm_secret: str = Header(default="")):
@@ -54,14 +74,106 @@ def run_now(x_idm_secret: str = Header(default="")):
 
 @app.post("/webhook/clinic-expert")
 async def webhook(request: Request, x_idm_secret: str = Header(default="")):
-    # validação simples por segredo compartilhado (o CE deve enviar esse header,
-    # ou troque por validação de assinatura HMAC do corpo quando o CE suportar)
     if not WEBHOOK_SECRET or not hmac.compare_digest(x_idm_secret, WEBHOOK_SECRET):
         raise HTTPException(status_code=401, detail="unauthorized")
     body = await request.json()
     evento = (body.get("event") or body.get("type") or "").lower()
-    # só reagimos ao que muda a fila; o resto devolve 200 e ignora
     if any(k in evento for k in ("patient", "booking", "opportunity", "lead", "crm")):
-        res = _rodar(f"webhook:{evento}")
-        return {"ok": True, "acionado": True, "detalhe": res}
+        return {"ok": True, "acionado": True, "detalhe": _rodar(f"webhook:{evento}")}
     return {"ok": True, "acionado": False, "evento": evento}
+
+@app.get("/fila.json")
+def fila_json(_: bool = Depends(_auth)):
+    res, quando = _get_result()
+    return JSONResponse({"ultima_rodada": quando, **(res or {})})
+
+@app.get("/painel", response_class=HTMLResponse)
+def painel(_: bool = Depends(_auth)):
+    res, quando = _get_result()
+    return HTMLResponse(_build_html(res, quando))
+
+# -------------------------- render do painel --------------------------
+def _acao(flags):
+    for x in flags:
+        if x.startswith("ERRO"): return "Corrigir cadastro + qualificar"
+        if "compareceu/faltou" in x: return "Reagendar — faltou e sem novo horário"
+        if "sem avaliação agendada" in x: return "Puxar avaliação (lead parado)"
+        if x.startswith("RESGATE"): return "Reengajar (esfriou)"
+        if x.startswith("OK"): return "Confirmar presença"
+    return "—"
+
+def _build_html(res, quando):
+    if not res:
+        return "<h1>Sem dados ainda. Recarregue em alguns segundos.</h1>"
+    r = res.get("resumo", {})
+    fila = res.get("fila", [])
+    from collections import Counter
+    etapas = Counter(L["etapa"] for L in fila)
+    acion = [L for L in fila if L["stage"] not in FECHADO
+             and any(("AGIR" in x or "ERRO" in x or "RESGATE" in x) for x in L["flags"])][:30]
+    def esc(s): return html.escape(str(s if s is not None else ""))
+    rows = ""
+    for i, L in enumerate(acion, 1):
+        cls = "hot" if L["etapa"] in ("Qualificação", "Agendamento") else "warm"
+        err = ' <span class="tag err">cadastro</span>' if any("ERRO" in x for x in L["flags"]) else ""
+        tel = esc(L.get("telefone") or "")
+        rows += (f"<tr><td class=rk>{i}</td>"
+                 f"<td><b>{esc(L.get('nome'))}</b>{err}<div class=tel>{tel}</div></td>"
+                 f"<td><span class='pill {cls}'>{esc(L['etapa'])}</span></td>"
+                 f"<td class=mut>{esc(L.get('vendedor') or '—')}</td>"
+                 f"<td>{esc(_acao(L['flags']))}</td></tr>")
+    ordem = ["Entrada","Qualificação","Agendamento","No-Show","Reagendamento","Orçamento",
+             "Recuperação N1","Recuperação N2","Recuperação N3","Ganho - Novo Cliente","Desqualificado","Perdido"]
+    mx = max(etapas.values()) if etapas else 1
+    bars = ""
+    for e in ordem:
+        n = etapas.get(e, 0)
+        if not n: continue
+        w = max(int(n/mx*100), 3)
+        col = "#b23a2e" if e in ("Recuperação N3","Perdido","Desqualificado") else ("#1e7d4f" if e=="Ganho - Novo Cliente" else "#b7892f")
+        bars += (f"<div class=brow><div class=blab>{esc(e)}</div>"
+                 f"<div class=btrack><div class=bfill style='width:{w}%;background:{col}'></div></div>"
+                 f"<div class=bval>{n}</div></div>")
+    return f"""<!doctype html><html lang=pt-BR><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width, initial-scale=1">
+<title>IDM · Fila de Prioridade</title>
+<style>
+:root{{--ink:#1c1c20;--mut:#6b6b73;--line:#e6e2d9;--gold:#b7892f;--bg:#faf8f4;--hot:#c23b2a;--hotb:#fbe6e2;--warm:#b07d14;--warmb:#fbf1d8;--red:#b23a2e;--redb:#f8e7e4}}
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:-apple-system,"Helvetica Neue",Arial,sans-serif;color:var(--ink);background:#fff;padding:16px;max-width:1100px;margin:0 auto}}
+.head{{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid var(--gold);padding-bottom:8px;margin-bottom:12px;flex-wrap:wrap;gap:6px}}
+.name{{font-family:Georgia,serif;font-size:22px}}.sub{{font-size:11px;color:var(--gold);letter-spacing:2px;text-transform:uppercase}}
+.meta{{font-size:11px;color:var(--mut);text-align:right}}
+.kpis{{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}}
+.kpi{{flex:1;min-width:120px;background:var(--bg);border:1px solid var(--line);border-top:3px solid var(--gold);border-radius:5px;padding:8px 12px}}
+.kpi.alert{{border-top-color:var(--red);background:var(--redb)}}
+.kpi .v{{font-size:22px;font-weight:700}}.kpi.alert .v{{color:var(--red)}}.kpi .l{{font-size:10px;color:var(--mut);text-transform:uppercase}}
+h2{{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--gold);margin:16px 0 8px;border-bottom:1px solid var(--line);padding-bottom:4px}}
+table{{width:100%;border-collapse:collapse}}
+th{{text-align:left;font-size:10px;text-transform:uppercase;color:var(--mut);border-bottom:1.5px solid var(--ink);padding:6px}}
+td{{padding:7px 6px;border-bottom:1px solid var(--line);vertical-align:middle;font-size:13px}}
+tr:nth-child(even) td{{background:#fcfbf8}}
+.rk{{font-family:Georgia,serif;font-weight:700;color:var(--gold);width:26px;text-align:center}}
+.tel{{color:var(--mut);font-size:11px}}.mut{{color:var(--mut)}}
+.pill{{font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;white-space:nowrap}}
+.hot{{background:var(--hotb);color:var(--hot)}}.warm{{background:var(--warmb);color:var(--warm)}}
+.tag.err{{font-size:9px;background:var(--redb);color:var(--red);padding:1px 5px;border-radius:10px;font-weight:700}}
+.brow{{display:flex;align-items:center;gap:8px;margin:3px 0}}.blab{{width:140px;font-size:12px;text-align:right}}
+.btrack{{flex:1;background:#eee;border-radius:3px;height:12px}}.bfill{{height:12px;border-radius:3px}}.bval{{width:28px;font-weight:700;font-size:12px}}
+.foot{{margin-top:16px;padding-top:8px;border-top:1px solid var(--line);font-size:10px;color:var(--mut)}}
+</style></head><body>
+<div class=head>
+  <div><div class=name>Instituto Dayane Mafra</div><div class=sub>Fila de Prioridade Comercial · ao vivo</div></div>
+  <div class=meta>Atualizado: {esc((quando or '')[:16].replace('T',' '))}<br>recarrega sozinho a cada ~{POLL_MINUTES} min</div>
+</div>
+<div class=kpis>
+  <div class=kpi><div class=v>{res.get('total_leads_pipeline',0)}</div><div class=l>Leads no pipeline</div></div>
+  <div class='kpi alert'><div class=v>{r.get('ativos_sem_agenda',0)}</div><div class=l>Ativos sem avaliação</div></div>
+  <div class='kpi alert'><div class=v>{r.get('erros_cadastro',0)}</div><div class=l>Erros de cadastro</div></div>
+  <div class=kpi><div class=v>{r.get('em_resgate',0)}</div><div class=l>Em resgate</div></div>
+</div>
+<h2>Agir agora — ordenado por prioridade</h2>
+<table><thead><tr><th>#</th><th>Lead</th><th>Etapa</th><th>Vendedor</th><th>O que fazer</th></tr></thead><tbody>{rows}</tbody></table>
+<h2>Saúde do funil — leads por etapa</h2>{bars}
+<div class=foot>Fonte: API oficial do Clinic Expert (CRM · Agenda · Vendas) · só leitura. Origem real (pago×orgânico) e tempo exato sem resposta vêm da conversa (camada à parte).</div>
+</body></html>"""

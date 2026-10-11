@@ -3,8 +3,13 @@
 """
 IDM Escuta — Motor da Fila de Prioridade (núcleo). SÓ LEITURA na API oficial do CE.
 Sem dependência de 'curl': usa urllib com User-Agent de navegador (Cloudflare).
+
+Ajustes 11/10/2026:
+- api(): retry com backoff no HTTP 429 (respeita Retry-After); 404 deixa de poluir o log.
+- _get_patient(): cache por UUID (TTL 1h) + pausa entre chamadas, para não estourar o
+  rate limit do Clinic Expert quando o poll roda a cada 3 min (antes: 137 chamadas em rajada).
 """
-import json, os, urllib.request, urllib.error, datetime as dt
+import json, os, time, urllib.request, urllib.error, datetime as dt
 
 BASE = "https://api.clinicaexperts.com.br/api/v1"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -22,16 +27,27 @@ def _load_key():
 
 KEY = _load_key()
 
-def api(path):
+def api(path, _tries=4):
     url = path if path.startswith("http") else f"{BASE}/{path}"
     req = urllib.request.Request(url, headers={
         "Authorization": f"Bearer {KEY}", "User-Agent": UA, "Accept": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=45) as r:
-            return json.loads(r.read().decode("utf-8"))
-    except Exception as e:
-        print("[api] erro", path, e)
-        return {}
+    for attempt in range(_tries):
+        try:
+            with urllib.request.urlopen(req, timeout=45) as r:
+                return json.loads(r.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < _tries - 1:
+                ra = e.headers.get("Retry-After")
+                wait = int(ra) if (ra and str(ra).isdigit()) else (2 ** attempt)
+                time.sleep(min(wait, 15))
+                continue
+            if e.code != 404:  # 404 em patients/{uuid} é lead sem cadastro de paciente — esperado
+                print("[api] erro", path, e)
+            return {}
+        except Exception as e:
+            print("[api] erro", path, e)
+            return {}
+    return {}
 
 def api_all(path, cap_pages=40):
     out, pg = [], 1
@@ -44,6 +60,24 @@ def api_all(path, cap_pages=40):
             break
         pg += 1
     return out
+
+# Cache de pacientes (persiste entre as rodadas do poll no mesmo processo).
+# Evita refazer 137 chamadas a cada 3 min e tomar 429 do Clinic Expert.
+_PCACHE = {}
+_PCACHE_TTL = 3600  # 1 hora
+
+def _get_patient(uuid):
+    now = time.time()
+    c = _PCACHE.get(uuid)
+    if c and now - c["t"] < _PCACHE_TTL:
+        return c["phone"], c["tags"]
+    pat = api(f"patients/{uuid}")
+    pd = pat.get("data") or pat
+    phone = pd.get("phone") if isinstance(pd, dict) else None
+    tags = pd.get("tags") if isinstance(pd, dict) else None
+    _PCACHE[uuid] = {"phone": phone, "tags": tags, "t": now}
+    time.sleep(0.3)  # throttle entre chamadas de rede (não vale para cache hit)
+    return phone, tags
 
 STAGE_ORDER = {"Entrada":0,"Desqualificado":1,"Qualificação":2,"Agendamento":3,"No-Show":4,
     "Reagendamento":5,"Orçamento":6,"Recuperação N1":7,"Recuperação N2":8,"Recuperação N3":9,
@@ -105,9 +139,7 @@ def run_motor(enrich_patients=True):
         p = o.get("patient") or {}
         phone, tags = None, None
         if enrich_patients and p.get("uuid"):
-            pat = api(f"patients/{p['uuid']}"); pd = pat.get("data") or pat
-            if isinstance(pd, dict):
-                phone, tags = pd.get("phone"), pd.get("tags")
+            phone, tags = _get_patient(p["uuid"])
         chave = _norm(phone) or (p.get("name") or "").strip().lower()
         L = {"nome": p.get("name"), "telefone": phone or "(só no WhatsApp)",
              "etapa": (o.get("stage") or {}).get("name") or "?",

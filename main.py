@@ -22,6 +22,7 @@ POLL_MINUTES = int(os.environ.get("POLL_MINUTES", "15"))
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 PANEL_USER = os.environ.get("PANEL_USER", "")
 PANEL_PASS = os.environ.get("PANEL_PASS", "")
+PANEL_TOKEN = os.environ.get("PANEL_TOKEN", "")  # link secreto (1 toque, celular/desktop)
 
 app = FastAPI(title="IDM Backend", version="1.1")
 security = HTTPBasic()
@@ -92,6 +93,21 @@ def painel(_: bool = Depends(_auth)):
     res, quando = _get_result()
     return HTMLResponse(_build_html(res, quando))
 
+@app.get("/p/{token}", response_class=HTMLResponse)
+def painel_link(token: str):
+    # Link secreto (capability URL): 1 toque no celular, sem caixa de senha.
+    if not PANEL_TOKEN or not hmac.compare_digest(token, PANEL_TOKEN):
+        raise HTTPException(status_code=404, detail="not found")
+    res, quando = _get_result()
+    return HTMLResponse(_build_html(res, quando))
+
+@app.get("/p/{token}/fila.json")
+def fila_link(token: str):
+    if not PANEL_TOKEN or not hmac.compare_digest(token, PANEL_TOKEN):
+        raise HTTPException(status_code=404, detail="not found")
+    res, quando = _get_result()
+    return JSONResponse({"ultima_rodada": quando, **(res or {})})
+
 # -------------------------- render do painel --------------------------
 def _acao(flags):
     for x in flags:
@@ -136,6 +152,7 @@ def _build_html(res, quando):
                  f"<div class=bval>{n}</div></div>")
     return f"""<!doctype html><html lang=pt-BR><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width, initial-scale=1">
+<meta http-equiv=refresh content="300">
 <title>IDM · Fila de Prioridade</title>
 <style>
 :root{{--ink:#1c1c20;--mut:#6b6b73;--line:#e6e2d9;--gold:#b7892f;--bg:#faf8f4;--hot:#c23b2a;--hotb:#fbe6e2;--warm:#b07d14;--warmb:#fbf1d8;--red:#b23a2e;--redb:#f8e7e4}}

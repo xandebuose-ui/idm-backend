@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-Grava a fila no Firestore do projeto 'instituto-mafra', coleção SEPARADA e trancada
-'escuta_fila' (dado de paciente — só gestão/master lê, ver deploy/firestore-rules-escuta.txt).
-Usa firebase-admin com uma conta de serviço (GOOGLE_APPLICATION_CREDENTIALS).
+Grava a fila no Firestore do projeto 'instituto-mafra'.
+UM único documento snapshot: escuta_fila/atual = {gerado_em, total, resumo, fila:[...]}.
+→ 1 escrita por rodada (não 137), barato, sem docs órfãos, e o app lê 1 doc ao vivo.
+Acesso de leitura é controlado pelas Regras do Firestore (ver deploy/firestore-rules-escuta.txt).
+Usa firebase-admin com conta de serviço (GOOGLE_APPLICATION_CREDENTIALS).
 Se as credenciais não estiverem presentes, NÃO quebra o motor — só loga e segue.
 """
 import os
 
 _COLL = os.environ.get("ESCUTA_COLLECTION", "escuta_fila")
+_DOC = os.environ.get("ESCUTA_DOC", "atual")
 _db = None
 
 def _get_db():
@@ -31,24 +34,18 @@ def _get_db():
         return None
 
 def push_fila(resultado):
-    """Grava 1 doc de resumo + 1 doc por lead (id = opp_uuid). Idempotente (merge)."""
+    """Grava 1 doc snapshot 'atual' com a fila inteira. Idempotente (sobrescreve)."""
     db = _get_db()
     if db is None:
         return False
     try:
-        col = db.collection(_COLL)
-        # doc de resumo (sempre 'atual')
-        col.document("_resumo").set({
+        db.collection(_COLL).document(_DOC).set({
             "gerado_em": resultado["gerado_em"],
             "total_leads_pipeline": resultado["total_leads_pipeline"],
             "resumo": resultado["resumo"],
+            "fila": resultado["fila"],
         })
-        batch = db.batch()
-        for L in resultado["fila"]:
-            doc_id = L.get("opp_uuid") or (L.get("nome") or "sem-nome")
-            batch.set(col.document(doc_id), L)
-        batch.commit()
-        print(f"[firebase] fila gravada em '{_COLL}' ({len(resultado['fila'])} leads)")
+        print(f"[firebase] fila gravada em '{_COLL}/{_DOC}' ({len(resultado['fila'])} leads)")
         return True
     except Exception as e:
         print("[firebase] erro ao gravar:", e)

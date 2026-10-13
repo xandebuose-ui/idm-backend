@@ -4,12 +4,16 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 router = APIRouter()
 _CTX = ssl.create_default_context()
+_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0 Safari/537.36"
 def _req(method, url, headers=None, data=None, timeout=20):
+    h = dict(headers or {})
+    h.setdefault("User-Agent", _UA)
+    h.setdefault("Accept", "application/json, text/plain, */*")
+    h.setdefault("Accept-Language", "pt-BR,pt;q=0.9,en;q=0.8")
     try:
-        req = urllib.request.Request(url, method=method, headers=dict(headers or {}))
+        req = urllib.request.Request(url, method=method, headers=h)
         if data is not None:
-            req.data = json.dumps(data).encode()
-            req.add_header("Content-Type","application/json"); req.add_header("Accept","application/json")
+            req.data = json.dumps(data).encode(); req.add_header("Content-Type","application/json")
         with urllib.request.urlopen(req, timeout=timeout, context=_CTX) as r:
             return r.status, r.read(30000).decode("utf-8","replace")
     except urllib.error.HTTPError as e:
@@ -24,35 +28,26 @@ def _keys(o, n=25):
     return None
 def _sniff(bd):
     low=(bd or "").lower()
-    for m in ("just a moment","attention required","cloudflare","access denied","forbidden","<!doctype html"):
+    for m in ("error code: 1010","just a moment","attention required","cloudflare","access denied","<!doctype html"):
         if m in low: return m
-    return "(sem bloqueio html)"
+    return "(ok/sem bloqueio)"
 @router.get("/diag")
 def diag():
-    out={"nota":"diag v2 — status/contagem/mensagens; sem tokens/PII"}
-    reach={}
-    for name,url in [("clinichat_root","https://clinichat.clinicaexperts.com.br/"),
-                     ("api_v1_sem_chave","https://api.clinicaexperts.com.br/api/v1/patients?page=1"),
-                     ("firestore","https://firestore.googleapis.com/v1/projects/instituto-mafra/databases/(default)/documents")]:
-        st,bd=_req("GET",url); reach[name]={"status":st,"sniff":_sniff(bd),"len":len(bd or "")}
-    out["alcancabilidade"]=reach
+    out={"nota":"diag v3 (User-Agent de navegador)"}
     key=os.environ.get("CE_API_KEY")
     if key:
         st,bd=_req("GET","https://api.clinicaexperts.com.br/api/v1/patients?page=1",headers={"Authorization":"Bearer "+key})
-        e={"status":st}
+        e={"status":st,"sniff":_sniff(bd)}
         if st==200:
             try: e["total"]=(json.loads(bd).get("meta") or {}).get("of")
             except Exception: pass
-        else: e["msg"]=(bd or "")[:160]; e["sniff"]=_sniff(bd)
+        else: e["msg"]=(bd or "")[:160]
         out["api_oficial_com_chave"]=e
-    else:
-        out["api_oficial_com_chave"]={"erro":"sem CE_API_KEY"}
     email=os.environ.get("CE_EMAIL"); senha=os.environ.get("CE_SENHA")
     if not email or not senha:
         out["login"]={"erro":"sem CE_EMAIL/CE_SENHA"}; return JSONResponse(out)
-    out["login_email_dominio"]=("@"+email.split("@")[-1]) if "@" in email else "(sem @)"
     tentativas=[]; tok=None
-    for body in ({"email":email,"password":senha},{"login":email,"password":senha},{"username":email,"password":senha},{"email":email,"senha":senha}):
+    for body in ({"email":email,"password":senha},{"login":email,"password":senha},{"username":email,"password":senha}):
         st,bd=_req("POST","https://api.clinicaexperts.com.br/api/login",data=body)
         try:
             j=json.loads(bd); msg=str(j.get("message") or j.get("error") or "")[:120]
@@ -66,14 +61,14 @@ def diag():
     out["login_tentativas"]=tentativas; out["login_ok"]=bool(tok)
     if tok:
         st,bd=_req("GET","https://clinichat.clinicaexperts.com.br/contact-channel?from=0&to=1&orderBy=lastMessageTime%3ADESC&filters=%7B%7D",headers={"Authorization":"Bearer "+tok})
-        e={"status":st}
+        e={"status":st,"sniff":_sniff(bd)}
         if st==200:
             try: e["total"]=(json.loads(bd).get("pagination") or {}).get("total")
             except Exception: pass
         else: e["msg"]=(bd or "")[:160]
         out["clinichat_com_app_jwt"]=e
         probes={}
-        for name,url in [("api_me","https://api.clinicaexperts.com.br/api/me"),("api_user","https://api.clinicaexperts.com.br/api/user"),("clinichat_token","https://api.clinicaexperts.com.br/api/clinichat/token"),("communication_token","https://api.clinicaexperts.com.br/api/communication/token"),("contact_channel_api","https://api.clinicaexperts.com.br/api/contact-channel?from=0&to=1")]:
+        for name,url in [("api_me","https://api.clinicaexperts.com.br/api/me"),("clinichat_token","https://api.clinicaexperts.com.br/api/clinichat/token"),("communication_token","https://api.clinicaexperts.com.br/api/communication/token"),("contact_channel_api","https://api.clinicaexperts.com.br/api/contact-channel?from=0&to=1")]:
             st,bd=_req("GET",url,headers={"Authorization":"Bearer "+tok})
             ee={"status":st}
             if st==200:

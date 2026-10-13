@@ -17,6 +17,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from motor_fila import run_motor, FECHADO
 from firebase_writer import push_fila
+from diag import router as diag_router
 
 POLL_MINUTES = int(os.environ.get("POLL_MINUTES", "15"))
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
@@ -25,6 +26,7 @@ PANEL_PASS = os.environ.get("PANEL_PASS", "")
 PANEL_TOKEN = os.environ.get("PANEL_TOKEN", "")  # link secreto (1 toque, celular/desktop)
 
 app = FastAPI(title="IDM Backend", version="1.1")
+app.include_router(diag_router)
 security = HTTPBasic()
 _lock = threading.Lock()
 _last = {"result": None, "quando": None}

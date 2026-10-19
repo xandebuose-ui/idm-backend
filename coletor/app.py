@@ -1,26 +1,25 @@
 # -*- coding: utf-8 -*-
 """
-IDM Coletor — Fase 1 (go/no-go).
-Navegador real headless (Playwright) que: carrega o app do CE, detecta desafio
-Cloudflare, faz login com CE_EMAIL/CE_SENHA e tenta alcançar o clinichat
-(lê o token da sessão DENTRO do próprio navegador do bot e chama a API interna).
-Retorna só booleans/status/contagens — NUNCA token, senha, nome ou conteúdo.
+IDM Coletor — Fase 1 (go/no-go) v2.
+Navegador real headless (Playwright): carrega o app do CE, detecta Cloudflare,
+faz login com CE_EMAIL/CE_SENHA e tenta alcançar o clinichat.
+v2: captura o STATUS das requisições de auth na rede, mensagem de erro da tela,
+corrige a deteccao de "logado" (CE usa /signin, nao /login) e torna o submit
+mais robusto (clica botao + Enter na senha + espera a navegacao de verdade).
+Retorna so booleans/status/contagens/mensagens — NUNCA token, senha, nome ou PII.
 """
 import os
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
-app = FastAPI(title="IDM Coletor", version="0.1")
+app = FastAPI(title="IDM Coletor", version="0.2")
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36")
 
-# JS que roda DENTRO do navegador do bot: acha o JWT do clinichat na memória do
-# app (Vue store) e chama a API interna. Devolve só {jwt:bool,status,total}.
 _JS_CLINICHAT = r"""
 async () => {
   let jwt = null;
   const looksJwt = s => typeof s === 'string' && s.startsWith('eyJ') && s.length > 120;
-  // 1) varre a store do Vue (padrao Vue2) por uma chave de token
   try {
     const el = document.querySelector('#app');
     const root = el && (el.__vue__ || (el.__vue_app__ && el.__vue_app__._instance));
@@ -40,7 +39,6 @@ async () => {
     };
     if (state) walk(state, 0);
   } catch (e) {}
-  // 2) fallback: varre localStorage/sessionStorage por qualquer eyJ com aud clinichat
   if (!jwt) {
     try {
       for (const store of [localStorage, sessionStorage]) {
@@ -73,7 +71,7 @@ async () => {
 
 @app.get("/health")
 def health():
-    return {"status": "up", "service": "idm-coletor"}
+    return {"status": "up", "service": "idm-coletor", "version": "0.2"}
 
 
 @app.get("/diag_browser")
@@ -83,6 +81,10 @@ def diag_browser():
     email = os.environ.get("CE_EMAIL")
     senha = os.environ.get("CE_SENHA")
     out["tem_credenciais"] = bool(email and senha)
+    # pistas uteis sem expor segredo: tamanho da senha e se tem caractere especial
+    if senha:
+        out["senha_len"] = len(senha)
+        out["senha_tem_especial"] = any(c in senha for c in "@#$%&!*")
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True,
@@ -90,6 +92,18 @@ def diag_browser():
             ctx = browser.new_context(user_agent=_UA, locale="pt-BR",
                 viewport={"width": 1366, "height": 900})
             pg = ctx.new_page()
+
+            # captura status das requisicoes de auth
+            auth_reqs = {}
+            def _on_resp(resp):
+                try:
+                    u = resp.url
+                    if any(k in u.lower() for k in ("login", "signin", "auth", "sanctum", "token")):
+                        auth_reqs[u[:110]] = resp.status
+                except Exception:
+                    pass
+            pg.on("response", _on_resp)
+
             # 1) carregar o app
             try:
                 pg.goto("https://app.clinicaexperts.com.br/",
@@ -108,25 +122,75 @@ def diag_browser():
             if cf or not (email and senha):
                 browser.close()
                 return JSONResponse(out)
-            # 2) login
+
+            # 2) login (robusto + diagnostico)
             try:
-                pg.locator("input[type='email'], input[name='email']").first.fill(email)
-                pg.locator("input[type='password']").first.fill(senha)
-                pg.locator("button[type='submit'], button:has-text('Entrar'), button:has-text('Acessar'), button:has-text('Login')").first.click()
-                pg.wait_for_timeout(7000)
+                email_in = pg.locator("input[type='email'], input[name='email']").first
+                senha_in = pg.locator("input[type='password']").first
+                email_in.fill(email)
+                senha_in.fill(senha)
+                btn = pg.locator("button[type='submit'], button:has-text('Entrar'), "
+                                 "button:has-text('Acessar'), button:has-text('Login')")
+                n_btn = btn.count()
+                # submeter: clica no botao se existir, senao Enter; com fallback Enter
+                clicou = False
+                try:
+                    if n_btn > 0:
+                        btn.first.click(timeout=5000)
+                        clicou = True
+                    else:
+                        senha_in.press("Enter")
+                except Exception:
+                    try:
+                        senha_in.press("Enter")
+                    except Exception:
+                        pass
+                # esperar sair da tela de login
+                try:
+                    pg.wait_for_url(
+                        lambda u: ("signin" not in u.lower() and "login" not in u.lower()),
+                        timeout=12000)
+                except Exception:
+                    pass
+                pg.wait_for_timeout(2500)
                 url_pos = (pg.url or "")
+                inputs_apos = pg.locator("input[type='password']").count()
+                # mensagem de erro visivel na tela
+                erro = None
+                for sel in ["[role='alert']", ".v-messages__message", ".invalid-feedback",
+                            ".text-danger", ".error", ".el-message", ".Toastify__toast",
+                            ".toast", "[class*='error']"]:
+                    try:
+                        l = pg.locator(sel)
+                        if l.count() > 0:
+                            t = (l.first.inner_text() or "").strip()
+                            if t:
+                                erro = t[:160]
+                                break
+                    except Exception:
+                        pass
+                logado = ("signin" not in url_pos.lower()
+                          and "login" not in url_pos.lower()
+                          and inputs_apos == 0)
                 out["etapas"]["login"] = {
                     "url": url_pos[:120],
-                    "logado": ("/login" not in url_pos.lower()),
+                    "logado": logado,
+                    "botoes_submit": n_btn,
+                    "clicou_botao": clicou,
+                    "inputs_senha_apos": inputs_apos,
+                    "erro_tela": erro,
+                    "auth_requests": dict(list(auth_reqs.items())[:10]),
                 }
-                if "/login" in url_pos.lower():
+                if not logado:
                     browser.close()
                     return JSONResponse(out)
             except Exception as e:
                 out["etapas"]["login_err"] = str(e)[:160]
+                out["etapas"]["auth_requests"] = dict(list(auth_reqs.items())[:10])
                 browser.close()
                 return JSONResponse(out)
-            # 3) alcançar o clinichat
+
+            # 3) alcancar o clinichat
             try:
                 pg.goto("https://app.clinicaexperts.com.br/comunicacao/canais-de-comunicacao",
                         wait_until="networkidle", timeout=60000)

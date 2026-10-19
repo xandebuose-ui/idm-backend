@@ -196,3 +196,28 @@ tr:nth-child(even) td{{background:#fcfbf8}}
 <h2>Saúde do funil — leads por etapa</h2>{bars}
 <div class=foot>Fonte: API oficial do Clinic Expert (CRM · Agenda · Vendas) · só leitura. Origem real (pago×orgânico) e tempo exato sem resposta vêm da conversa (camada à parte).</div>
 </body></html>"""
+
+
+
+
+# ---- crachá (token do CliniChat): recebe do navegador e guarda no Firestore ----
+import firebase_writer as _fw
+_INGEST_SECRET = os.environ.get("INGEST_SECRET", "") or WEBHOOK_SECRET
+
+@app.post("/ingest_token")
+async def ingest_token(request: Request, x_idm_secret: str = Header(default="")):
+    if not _INGEST_SECRET or not hmac.compare_digest(x_idm_secret, _INGEST_SECRET):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    token = (body.get("token") or "").strip()
+    if not token.startswith("eyJ") or len(token) < 100:
+        raise HTTPException(status_code=400, detail="token invalido")
+    ok = _fw.save_token(token, origem=body.get("origem"))
+    return {"ok": ok, **_fw.token_info()}
+
+@app.get("/token_status")
+def token_status(_: bool = Depends(_auth)):
+    return _fw.token_info()

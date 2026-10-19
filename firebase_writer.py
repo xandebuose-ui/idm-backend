@@ -50,3 +50,73 @@ def push_fila(resultado):
     except Exception as e:
         print("[firebase] erro ao gravar:", e)
         return False
+
+
+
+
+# ---- crachá (token do CliniChat) — monitor de conversa ----
+_TOKEN_COLL = os.environ.get("ESCUTA_TOKEN_COLL", "escuta_token")
+_TOKEN_DOC = os.environ.get("ESCUTA_TOKEN_DOC", "clinichat")
+
+def _decode_exp(token):
+    try:
+        import json, base64
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        return json.loads(base64.urlsafe_b64decode(payload)).get("exp")
+    except Exception:
+        return None
+
+def save_token(token, origem=None):
+    db = _get_db()
+    if db is None:
+        print("[token] sem firestore — nao guardou")
+        return False
+    try:
+        import time
+        db.collection(_TOKEN_COLL).document(_TOKEN_DOC).set({
+            "token": token,
+            "exp": _decode_exp(token),
+            "atualizado_em": int(time.time()),
+            "origem": (origem or "")[:60],
+        })
+        print("[token] crachá guardado")
+        return True
+    except Exception as e:
+        print("[token] erro ao guardar:", e)
+        return False
+
+def get_token():
+    db = _get_db()
+    if db is None:
+        return None
+    try:
+        d = db.collection(_TOKEN_COLL).document(_TOKEN_DOC).get()
+        if d.exists:
+            return d.to_dict().get("token")
+    except Exception as e:
+        print("[token] erro leitura:", e)
+    return None
+
+def token_info():
+    import time
+    db = _get_db()
+    if db is None:
+        return {"ok": False, "motivo": "sem firestore"}
+    try:
+        d = db.collection(_TOKEN_COLL).document(_TOKEN_DOC).get()
+        if not d.exists:
+            return {"ok": True, "tem_token": False, "motivo": "nunca recebido"}
+        v = d.to_dict()
+        exp = v.get("exp")
+        agora = int(time.time())
+        return {
+            "ok": True,
+            "tem_token": bool(v.get("token")),
+            "atualizado_em": v.get("atualizado_em"),
+            "exp": exp,
+            "expira_em_horas": (round((exp - agora) / 3600, 1) if exp else None),
+            "vencido": (exp is not None and exp < agora),
+        }
+    except Exception as e:
+        return {"ok": False, "motivo": str(e)[:100]}

@@ -226,3 +226,14 @@ def token_status(_: bool = Depends(_auth)):
 @app.get("/cracha_status")
 def cracha_status_publico():
     return _fw.token_info()
+
+
+# ---- CORS p/ receber o crachá direto da página do CE ----
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://app.clinicaexperts.com.br"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)

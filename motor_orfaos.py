@@ -139,8 +139,13 @@ def run_orfaos(max_msg=80):
         "gerado_em": dt.datetime.now().isoformat(timespec="seconds"),
         "duracao_s": round(time.time() - t0, 1),
         "opps_crm": n_opps,
+        "opp_fones_n": len(opp_fones),
+        "comprou_fones_n": len(comprou_fones),
         "fila_viva": len(fila),
+        "fila_com_fone": len(fila) - buckets["sem_telefone"],
+        "match_opp": buckets["cliente_operacional"] + buckets["lead_andamento"],
         "candidatos_sem_opp": len(cand),
+        "avaliados_msg": min(len(cand), max_msg),
         "buckets": buckets,
     }
     _grava(resumo, itens)

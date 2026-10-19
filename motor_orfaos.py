@@ -63,52 +63,57 @@ def _primeira_msg(conv_id):
             return t
     return None
 
+_PAT_CACHE = {}
+
+def _patient_fones(uuid):
+    if uuid in _PAT_CACHE:
+        return _PAT_CACHE[uuid]
+    raw = mf.api("patients/" + uuid)
+    pd = raw.get("data") or raw
+    fones = set()
+    if isinstance(pd, dict):
+        ph = pd.get("phone")
+        if isinstance(ph, dict):
+            ph = ph.get("number") or ph.get("phone")
+        f = _fone(ph)
+        if f:
+            fones.add(f)
+        for c in (pd.get("contacts") or []):
+            v = None
+            if isinstance(c, dict):
+                v = c.get("phone") or c.get("number") or c.get("value") or c.get("content")
+                if isinstance(v, dict):
+                    v = v.get("number")
+            elif isinstance(c, str):
+                v = c
+            f = _fone(v)
+            if f:
+                fones.add(f)
+    _PAT_CACHE[uuid] = fones
+    time.sleep(0.22)
+    return fones
+
 def _indice_ce():
     opp_fones, comprou_fones = set(), set()
-    diag = {"tem_customer": 0, "customer_phone_hit": 0, "tem_patient_uuid": 0,
-            "patient_phone_hit": 0, "sample_opp_keys": [], "sample_customer_keys": [],
-            "sample_patient_keys": []}
+    diag = {"tem_patient_uuid": 0, "patient_phone_hit": 0}
     opps = mf.api_all("crm/opportunities?sort_column=created_at&sort_direction=desc")
-    for i, o in enumerate(opps):
-        if not diag["sample_opp_keys"]:
-            diag["sample_opp_keys"] = sorted(list(o.keys()))[:40]
-        ph = None
-        cust = o.get("customer") or {}
-        if isinstance(cust, dict) and cust:
-            diag["tem_customer"] += 1
-            if not diag["sample_customer_keys"]:
-                diag["sample_customer_keys"] = sorted(list(cust.keys()))[:40]
-            cp = cust.get("phone")
-            ph = (cp.get("number") if isinstance(cp, dict) else cp)
-            if _fone(ph):
-                diag["customer_phone_hit"] += 1
+    for o in opps:
         p = o.get("patient") or {}
-        if p.get("uuid"):
-            diag["tem_patient_uuid"] += 1
-            if not diag["sample_patient_keys"]:
-                try:
-                    raw = mf.api("patients/" + p["uuid"])
-                    pd = raw.get("data") or raw
-                    if isinstance(pd, dict):
-                        diag["sample_patient_keys"] = sorted(list(pd.keys()))[:40]
-                except Exception:
-                    pass
-            if not ph:
-                pph, _ = mf._get_patient(p["uuid"])
-                if _fone(pph):
-                    diag["patient_phone_hit"] += 1
-                    ph = pph
-        f = _fone(ph)
-        if not f:
+        if not p.get("uuid"):
             continue
-        opp_fones.add(f)
+        diag["tem_patient_uuid"] += 1
+        fones = _patient_fones(p["uuid"])
+        if not fones:
+            continue
+        diag["patient_phone_hit"] += 1
+        opp_fones |= fones
         pipe = (o.get("pipeline") or {}).get("name") or ""
         stage = (o.get("stage") or {}).get("name") or ""
         if pipe.upper().startswith("CLIENTES") or stage.startswith("Ganho"):
-            comprou_fones.add(f)
+            comprou_fones |= fones
     return opp_fones, comprou_fones, len(opps), diag
 
-def run_orfaos(max_msg=80):
+def run_orfaos(max_msg=220):
     t0 = time.time()
     opp_fones, comprou_fones, n_opps, idx_diag = _indice_ce()
     convs = _lista("inbox") + _lista("waiting")
@@ -121,7 +126,7 @@ def run_orfaos(max_msg=80):
             seen.add(cid)
         fila.append(c)
     buckets = {"orfao_frio": 0, "orfao_crosssell": 0, "lead_andamento": 0,
-               "cliente_operacional": 0, "ruido": 0, "revisar": 0, "sem_telefone": 0}
+               "cliente_operacional": 0, "ruido": 0, "revisar": 0, "sem_telefone": 0, "nao_avaliado": 0}
     cand, itens = [], []
     for c in fila:
         ct = c.get("contact") or {}
@@ -158,6 +163,7 @@ def run_orfaos(max_msg=80):
             "primeira_msg": msg[:280],
             "comprou": comprou,
         })
+    buckets["nao_avaliado"] = max(0, len(cand) - max_msg)
     resumo = {
         "gerado_em": dt.datetime.now().isoformat(timespec="seconds"),
         "duracao_s": round(time.time() - t0, 1),

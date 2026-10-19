@@ -249,3 +249,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/diag_clinichat")
+def diag_clinichat():
+    import urllib.request, urllib.error, json as _json
+    tok = _fw.get_token()
+    if not tok:
+        return {"ok": False, "motivo": "sem cracha"}
+    url = ("https://clinichat.clinicaexperts.com.br/contact-channel"
+           "?from=0&to=1&orderBy=lastMessageTime%3ADESC&filters=%7B%22status%22%3A%22inbox%22%7D")
+    req = urllib.request.Request(url, headers={
+        "Authorization": "Bearer " + tok,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            status = r.status
+            data = _json.loads(r.read().decode("utf-8", "ignore") or "{}")
+        total = None
+        if isinstance(data, dict):
+            pg = data.get("pagination") or {}
+            total = pg.get("total")
+        return {"ok": True, "status": status, "inbox_total": total}
+    except urllib.error.HTTPError as e:
+        return {"ok": False, "status": e.code, "motivo": "http"}
+    except Exception as e:
+        return {"ok": False, "motivo": str(e)[:120]}

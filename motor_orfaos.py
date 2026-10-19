@@ -65,16 +65,39 @@ def _primeira_msg(conv_id):
 
 def _indice_ce():
     opp_fones, comprou_fones = set(), set()
+    diag = {"tem_customer": 0, "customer_phone_hit": 0, "tem_patient_uuid": 0,
+            "patient_phone_hit": 0, "sample_opp_keys": [], "sample_customer_keys": [],
+            "sample_patient_keys": []}
     opps = mf.api_all("crm/opportunities?sort_column=created_at&sort_direction=desc")
-    for o in opps:
+    for i, o in enumerate(opps):
+        if not diag["sample_opp_keys"]:
+            diag["sample_opp_keys"] = sorted(list(o.keys()))[:40]
         ph = None
         cust = o.get("customer") or {}
-        if isinstance(cust, dict):
+        if isinstance(cust, dict) and cust:
+            diag["tem_customer"] += 1
+            if not diag["sample_customer_keys"]:
+                diag["sample_customer_keys"] = sorted(list(cust.keys()))[:40]
             cp = cust.get("phone")
             ph = (cp.get("number") if isinstance(cp, dict) else cp)
+            if _fone(ph):
+                diag["customer_phone_hit"] += 1
         p = o.get("patient") or {}
-        if not ph and p.get("uuid"):
-            ph, _ = mf._get_patient(p["uuid"])
+        if p.get("uuid"):
+            diag["tem_patient_uuid"] += 1
+            if not diag["sample_patient_keys"]:
+                try:
+                    raw = mf.api("patients/" + p["uuid"])
+                    pd = raw.get("data") or raw
+                    if isinstance(pd, dict):
+                        diag["sample_patient_keys"] = sorted(list(pd.keys()))[:40]
+                except Exception:
+                    pass
+            if not ph:
+                pph, _ = mf._get_patient(p["uuid"])
+                if _fone(pph):
+                    diag["patient_phone_hit"] += 1
+                    ph = pph
         f = _fone(ph)
         if not f:
             continue
@@ -83,11 +106,11 @@ def _indice_ce():
         stage = (o.get("stage") or {}).get("name") or ""
         if pipe.upper().startswith("CLIENTES") or stage.startswith("Ganho"):
             comprou_fones.add(f)
-    return opp_fones, comprou_fones, len(opps)
+    return opp_fones, comprou_fones, len(opps), diag
 
 def run_orfaos(max_msg=80):
     t0 = time.time()
-    opp_fones, comprou_fones, n_opps = _indice_ce()
+    opp_fones, comprou_fones, n_opps, idx_diag = _indice_ce()
     convs = _lista("inbox") + _lista("waiting")
     seen, fila = set(), []
     for c in convs:
@@ -147,6 +170,7 @@ def run_orfaos(max_msg=80):
         "candidatos_sem_opp": len(cand),
         "avaliados_msg": min(len(cand), max_msg),
         "buckets": buckets,
+        "diag_idx": idx_diag,
     }
     _grava(resumo, itens)
     return resumo

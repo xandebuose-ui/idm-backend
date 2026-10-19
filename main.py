@@ -221,3 +221,8 @@ async def ingest_token(request: Request, x_idm_secret: str = Header(default=""))
 @app.get("/token_status")
 def token_status(_: bool = Depends(_auth)):
     return _fw.token_info()
+
+
+@app.get("/cracha_status")
+def cracha_status_publico():
+    return _fw.token_info()

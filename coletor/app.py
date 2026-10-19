@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-IDM Coletor — Fase 1 (go/no-go) v3.
-Distingue "fill nao registrou" de "trava anti-robo no envio".
-Mudancas v3: digita com TECLADO REAL (type) em vez de fill; detecta captcha/
-Turnstile; captura TODAS as requisicoes POST (url->status) p/ ver se o login
-dispara; captura um trecho do texto da tela depois do envio.
-Retorna so booleans/status/contagens/trechos — NUNCA token, senha, nome ou PII.
+IDM Coletor — Fase 1 (go/no-go) v4.
+Confirma a identidade do bloqueio: captura tag/classe/src dos elementos de
+captcha detectados + scripts de Turnstile/captcha carregados na pagina.
+Retorna so booleans/status/contagens/trechos tecnicos — NUNCA token, senha,
+nome ou PII.
 """
 import os
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
-app = FastAPI(title="IDM Coletor", version="0.3")
+app = FastAPI(title="IDM Coletor", version="0.4")
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36")
 
@@ -71,10 +70,35 @@ _SEL_CAPTCHA = ("iframe[src*='challenges.cloudflare.com'], iframe[src*='turnstil
                 ".cf-turnstile, [class*='turnstile'], [class*='captcha'], "
                 "iframe[src*='recaptcha'], .g-recaptcha, iframe[src*='hcaptcha']")
 
+_JS_CAPTCHA_INFO = r"""
+() => {
+  const sels = ["iframe[src*='challenges.cloudflare.com']","iframe[src*='turnstile']",
+    ".cf-turnstile","[class*='turnstile']","[class*='captcha']",
+    "iframe[src*='recaptcha']",".g-recaptcha","iframe[src*='hcaptcha']"];
+  const seen = new Set(); const out = [];
+  for (const s of sels) {
+    document.querySelectorAll(s).forEach(el => {
+      if (out.length >= 8) return;
+      const cls = (el.className || "").toString().slice(0, 50);
+      const src = (el.getAttribute("src") || "").slice(0, 90);
+      const d = el.tagName.toLowerCase() + "|" + cls + "|" + src;
+      if (!seen.has(d)) { seen.add(d); out.push(d); }
+    });
+  }
+  return out;
+}
+"""
+
+_JS_CAPTCHA_SCRIPTS = r"""
+() => Array.from(document.scripts).map(s => s.src)
+  .filter(u => /turnstile|challenges\.cloudflare|recaptcha|hcaptcha|captcha/i.test(u))
+  .slice(0, 6)
+"""
+
 
 @app.get("/health")
 def health():
-    return {"status": "up", "service": "idm-coletor", "version": "0.3"}
+    return {"status": "up", "service": "idm-coletor", "version": "0.4"}
 
 
 @app.get("/diag_browser")
@@ -94,7 +118,6 @@ def diag_browser():
                 viewport={"width": 1366, "height": 900})
             pg = ctx.new_page()
 
-            # captura TODAS as respostas de POST (url -> status)
             posts = {}
             def _on_resp(resp):
                 try:
@@ -124,7 +147,7 @@ def diag_browser():
                 browser.close()
                 return JSONResponse(out)
 
-            # 2) login com TECLADO REAL + diagnostico
+            # 2) login com teclado real + diagnostico + identidade do captcha
             try:
                 email_in = pg.locator("input[type='email'], input[name='email']").first
                 senha_in = pg.locator("input[type='password']").first
@@ -135,7 +158,6 @@ def diag_browser():
                 senha_in.fill("")
                 pg.keyboard.type(senha, delay=25)
                 pg.wait_for_timeout(300)
-                # botao de envio: prioriza type=submit, senao texto
                 btn = pg.locator("button[type='submit']")
                 if btn.count() == 0:
                     btn = pg.locator("button:has-text('Entrar'), button:has-text('Acessar')")
@@ -152,7 +174,6 @@ def diag_browser():
                         senha_in.press("Enter")
                     except Exception:
                         pass
-                # esperar sair da tela de login
                 try:
                     pg.wait_for_url(
                         lambda u: ("signin" not in u.lower() and "login" not in u.lower()),
@@ -163,6 +184,16 @@ def diag_browser():
                 url_pos = (pg.url or "")
                 inputs_apos = pg.locator("input[type='password']").count()
                 captcha_apos = pg.locator(_SEL_CAPTCHA).count()
+                captcha_info = []
+                captcha_scripts = []
+                try:
+                    captcha_info = pg.evaluate(_JS_CAPTCHA_INFO)
+                except Exception:
+                    pass
+                try:
+                    captcha_scripts = pg.evaluate(_JS_CAPTCHA_SCRIPTS)
+                except Exception:
+                    pass
                 erro = None
                 for sel in ["[role='alert']", ".v-messages__message", ".invalid-feedback",
                             ".text-danger", ".error", ".el-message", ".Toastify__toast",
@@ -176,10 +207,6 @@ def diag_browser():
                                 break
                     except Exception:
                         pass
-                try:
-                    corpo = (pg.inner_text("body") or "").replace("\n", " ").strip()[:280]
-                except Exception:
-                    corpo = None
                 logado = ("signin" not in url_pos.lower()
                           and "login" not in url_pos.lower()
                           and inputs_apos == 0)
@@ -190,16 +217,16 @@ def diag_browser():
                     "clicou_botao": clicou,
                     "inputs_senha_apos": inputs_apos,
                     "captcha_apos": captcha_apos,
+                    "captcha_info": captcha_info,
+                    "captcha_scripts": captcha_scripts,
                     "erro_tela": erro,
                     "posts": dict(list(posts.items())[:14]),
-                    "corpo_trecho": corpo,
                 }
                 if not logado:
                     browser.close()
                     return JSONResponse(out)
             except Exception as e:
                 out["etapas"]["login_err"] = str(e)[:160]
-                out["etapas"]["posts"] = dict(list(posts.items())[:14])
                 browser.close()
                 return JSONResponse(out)
 

@@ -44,12 +44,24 @@ def _rodar(motivo: str):
     finally:
         _lock.release()
 
+def _vigia_cracha():
+    try:
+        import firebase_writer as _fw
+        _fw.atualizar_alerta_cracha()
+    except Exception as e:
+        print("[cracha] vigia erro:", e)
+
 @app.on_event("startup")
 def _startup():
     sched = BackgroundScheduler(timezone="America/Sao_Paulo")
     sched.add_job(lambda: _rodar("poll"), "interval", minutes=POLL_MINUTES)
+    sched.add_job(_vigia_cracha, "interval", minutes=30)
+    try:
+        _vigia_cracha()
+    except Exception:
+        pass
     sched.start()
-    print(f"[startup] poll a cada {POLL_MINUTES} min ligado")
+    print(f"[startup] poll a cada {POLL_MINUTES} min ligado; vigia cracha 30/30min")
 
 def _auth(cred: HTTPBasicCredentials = Depends(security)):
     ok_u = PANEL_USER and hmac.compare_digest(cred.username, PANEL_USER)

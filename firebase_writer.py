@@ -106,17 +106,46 @@ def token_info():
     try:
         d = db.collection(_TOKEN_COLL).document(_TOKEN_DOC).get()
         if not d.exists:
-            return {"ok": True, "tem_token": False, "motivo": "nunca recebido"}
+            return {"ok": True, "tem_token": False, "motivo": "nunca recebido", "nivel": "sem_cracha"}
         v = d.to_dict()
         exp = v.get("exp")
         agora = int(time.time())
+        horas = (round((exp - agora) / 3600, 1) if exp else None)
+        vencido = (exp is not None and exp < agora)
+        if vencido:
+            nivel = "vencido"
+        elif horas is not None and horas <= 24:
+            nivel = "vencendo"
+        else:
+            nivel = "ok"
         return {
             "ok": True,
             "tem_token": bool(v.get("token")),
             "atualizado_em": v.get("atualizado_em"),
             "exp": exp,
-            "expira_em_horas": (round((exp - agora) / 3600, 1) if exp else None),
-            "vencido": (exp is not None and exp < agora),
+            "expira_em_horas": horas,
+            "vencido": vencido,
+            "nivel": nivel,
         }
     except Exception as e:
         return {"ok": False, "motivo": str(e)[:100]}
+
+
+def atualizar_alerta_cracha():
+    import time
+    info = token_info()
+    nivel = info.get("nivel")
+    db = _get_db()
+    if db is None:
+        return info
+    try:
+        db.collection(_TOKEN_COLL).document(_TOKEN_DOC).set({
+            "alerta_nivel": nivel,
+            "alerta_horas": info.get("expira_em_horas"),
+            "alerta_em": int(time.time()),
+        }, merge=True)
+        if nivel in ("vencendo", "vencido", "sem_cracha"):
+            print("[cracha] ALERTA nivel=%s horas=%s" % (nivel, info.get("expira_em_horas")))
+    except Exception as e:
+        print("[cracha] erro ao gravar alerta:", e)
+    return info

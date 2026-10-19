@@ -56,12 +56,17 @@ def _startup():
     sched = BackgroundScheduler(timezone="America/Sao_Paulo")
     sched.add_job(lambda: _rodar("poll"), "interval", minutes=POLL_MINUTES)
     sched.add_job(_vigia_cracha, "interval", minutes=30)
+    sched.add_job(lambda: _rodar_orfaos("poll"), "interval", minutes=15)
     try:
         _vigia_cracha()
     except Exception:
         pass
     sched.start()
-    print(f"[startup] poll a cada {POLL_MINUTES} min ligado; vigia cracha 30/30min")
+    try:
+        threading.Thread(target=_rodar_orfaos, args=("startup",), daemon=True).start()
+    except Exception:
+        pass
+    print(f"[startup] poll {POLL_MINUTES}min; vigia cracha 30min; orfaos 15min")
 
 def _auth(cred: HTTPBasicCredentials = Depends(security)):
     ok_u = PANEL_USER and hmac.compare_digest(cred.username, PANEL_USER)
@@ -277,3 +282,42 @@ def diag_clinichat():
         return {"ok": False, "status": e.code, "motivo": "http"}
     except Exception as e:
         return {"ok": False, "motivo": str(e)[:120]}
+
+
+# ---- Bloco B: motor de orfaos (conversa = verdade; so-leitura) ----
+import motor_orfaos as _orf
+_last_orf = {"result": None, "quando": None}
+_orf_lock = threading.Lock()
+
+def _sp_now():
+    return dt.datetime.utcnow() - dt.timedelta(hours=3)
+
+def _rodar_orfaos(motivo="poll"):
+    if motivo == "poll":
+        n = _sp_now()
+        mins = n.hour * 60 + n.minute
+        if mins < 510 or mins > 1200:
+            return {"ok": True, "skip": "fora do horario comercial"}
+    if not _orf_lock.acquire(blocking=False):
+        return {"ok": True, "skip": "ja rodando"}
+    try:
+        res = _orf.run_orfaos()
+        _last_orf["result"] = res
+        _last_orf["quando"] = res.get("gerado_em")
+        return res
+    except Exception as e:
+        print("[orfaos] erro:", e)
+        return {"ok": False, "erro": str(e)[:160]}
+    finally:
+        _orf_lock.release()
+
+@app.post("/run_orfaos")
+def run_orfaos_now(x_idm_secret: str = Header(default="")):
+    if not WEBHOOK_SECRET or not hmac.compare_digest(x_idm_secret, WEBHOOK_SECRET):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    threading.Thread(target=_rodar_orfaos, args=("manual",), daemon=True).start()
+    return {"ok": True, "started": True}
+
+@app.get("/orfaos.json")
+def orfaos_json():
+    return {"ok": True, "quando": _last_orf["quando"], "result": _last_orf["result"]}

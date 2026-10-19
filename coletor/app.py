@@ -1,18 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-IDM Coletor — Fase 1 (go/no-go) v2.
-Navegador real headless (Playwright): carrega o app do CE, detecta Cloudflare,
-faz login com CE_EMAIL/CE_SENHA e tenta alcançar o clinichat.
-v2: captura o STATUS das requisições de auth na rede, mensagem de erro da tela,
-corrige a deteccao de "logado" (CE usa /signin, nao /login) e torna o submit
-mais robusto (clica botao + Enter na senha + espera a navegacao de verdade).
-Retorna so booleans/status/contagens/mensagens — NUNCA token, senha, nome ou PII.
+IDM Coletor — Fase 1 (go/no-go) v3.
+Distingue "fill nao registrou" de "trava anti-robo no envio".
+Mudancas v3: digita com TECLADO REAL (type) em vez de fill; detecta captcha/
+Turnstile; captura TODAS as requisicoes POST (url->status) p/ ver se o login
+dispara; captura um trecho do texto da tela depois do envio.
+Retorna so booleans/status/contagens/trechos — NUNCA token, senha, nome ou PII.
 """
 import os
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
-app = FastAPI(title="IDM Coletor", version="0.2")
+app = FastAPI(title="IDM Coletor", version="0.3")
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36")
 
@@ -68,10 +67,14 @@ async () => {
 }
 """
 
+_SEL_CAPTCHA = ("iframe[src*='challenges.cloudflare.com'], iframe[src*='turnstile'], "
+                ".cf-turnstile, [class*='turnstile'], [class*='captcha'], "
+                "iframe[src*='recaptcha'], .g-recaptcha, iframe[src*='hcaptcha']")
+
 
 @app.get("/health")
 def health():
-    return {"status": "up", "service": "idm-coletor", "version": "0.2"}
+    return {"status": "up", "service": "idm-coletor", "version": "0.3"}
 
 
 @app.get("/diag_browser")
@@ -81,10 +84,8 @@ def diag_browser():
     email = os.environ.get("CE_EMAIL")
     senha = os.environ.get("CE_SENHA")
     out["tem_credenciais"] = bool(email and senha)
-    # pistas uteis sem expor segredo: tamanho da senha e se tem caractere especial
     if senha:
         out["senha_len"] = len(senha)
-        out["senha_tem_especial"] = any(c in senha for c in "@#$%&!*")
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True,
@@ -93,13 +94,12 @@ def diag_browser():
                 viewport={"width": 1366, "height": 900})
             pg = ctx.new_page()
 
-            # captura status das requisicoes de auth
-            auth_reqs = {}
+            # captura TODAS as respostas de POST (url -> status)
+            posts = {}
             def _on_resp(resp):
                 try:
-                    u = resp.url
-                    if any(k in u.lower() for k in ("login", "signin", "auth", "sanctum", "token")):
-                        auth_reqs[u[:110]] = resp.status
+                    if resp.request.method == "POST":
+                        posts[resp.url[:110]] = resp.status
                 except Exception:
                     pass
             pg.on("response", _on_resp)
@@ -118,21 +118,28 @@ def diag_browser():
                 "url": (pg.url or "")[:120], "cf_challenge": cf,
                 "inputs_email": pg.locator("input[type='email'], input[name='email']").count(),
                 "inputs_senha": pg.locator("input[type='password']").count(),
+                "captcha_na_tela": pg.locator(_SEL_CAPTCHA).count(),
             }
             if cf or not (email and senha):
                 browser.close()
                 return JSONResponse(out)
 
-            # 2) login (robusto + diagnostico)
+            # 2) login com TECLADO REAL + diagnostico
             try:
                 email_in = pg.locator("input[type='email'], input[name='email']").first
                 senha_in = pg.locator("input[type='password']").first
-                email_in.fill(email)
-                senha_in.fill(senha)
-                btn = pg.locator("button[type='submit'], button:has-text('Entrar'), "
-                                 "button:has-text('Acessar'), button:has-text('Login')")
+                email_in.click()
+                email_in.fill("")
+                pg.keyboard.type(email, delay=25)
+                senha_in.click()
+                senha_in.fill("")
+                pg.keyboard.type(senha, delay=25)
+                pg.wait_for_timeout(300)
+                # botao de envio: prioriza type=submit, senao texto
+                btn = pg.locator("button[type='submit']")
+                if btn.count() == 0:
+                    btn = pg.locator("button:has-text('Entrar'), button:has-text('Acessar')")
                 n_btn = btn.count()
-                # submeter: clica no botao se existir, senao Enter; com fallback Enter
                 clicou = False
                 try:
                     if n_btn > 0:
@@ -155,7 +162,7 @@ def diag_browser():
                 pg.wait_for_timeout(2500)
                 url_pos = (pg.url or "")
                 inputs_apos = pg.locator("input[type='password']").count()
-                # mensagem de erro visivel na tela
+                captcha_apos = pg.locator(_SEL_CAPTCHA).count()
                 erro = None
                 for sel in ["[role='alert']", ".v-messages__message", ".invalid-feedback",
                             ".text-danger", ".error", ".el-message", ".Toastify__toast",
@@ -169,6 +176,10 @@ def diag_browser():
                                 break
                     except Exception:
                         pass
+                try:
+                    corpo = (pg.inner_text("body") or "").replace("\n", " ").strip()[:280]
+                except Exception:
+                    corpo = None
                 logado = ("signin" not in url_pos.lower()
                           and "login" not in url_pos.lower()
                           and inputs_apos == 0)
@@ -178,15 +189,17 @@ def diag_browser():
                     "botoes_submit": n_btn,
                     "clicou_botao": clicou,
                     "inputs_senha_apos": inputs_apos,
+                    "captcha_apos": captcha_apos,
                     "erro_tela": erro,
-                    "auth_requests": dict(list(auth_reqs.items())[:10]),
+                    "posts": dict(list(posts.items())[:14]),
+                    "corpo_trecho": corpo,
                 }
                 if not logado:
                     browser.close()
                     return JSONResponse(out)
             except Exception as e:
                 out["etapas"]["login_err"] = str(e)[:160]
-                out["etapas"]["auth_requests"] = dict(list(auth_reqs.items())[:10])
+                out["etapas"]["posts"] = dict(list(posts.items())[:14])
                 browser.close()
                 return JSONResponse(out)
 

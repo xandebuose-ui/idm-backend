@@ -42,10 +42,11 @@ def _fone(p):
         d = d[:2] + d[-8:]
     return d
 
-def _lista(status, cap=600):
+def _lista(status=None, cap=800):
+    filtro = {} if status is None else {"status": status}
     out, frm, step = [], 0, 50
     while frm < cap:
-        f = urllib.parse.quote(json.dumps({"status": status}))
+        f = urllib.parse.quote(json.dumps(filtro))
         data, err = _cc("/contact-channel?from=%d&to=%d&orderBy=lastMessageTime%%3ADESC&filters=%s" % (frm, frm + step, f))
         if err or not data:
             break
@@ -195,15 +196,19 @@ def _indice_ce():
 def run_orfaos(max_msg=130):
     t0 = time.time()
     opp_fones, comprou_fones, opp_nomes, n_opps, idx_diag = _indice_ce()
-    convs = _lista("inbox") + _lista("waiting")
-    seen, fila = set(), []
+    desde = os.environ.get("ESCUTA_DESDE") or ("%04d-%02d-01" % (dt.date.today().year, dt.date.today().month))
+    convs = _lista(None)
+    seen, fila, total = set(), [], 0
     for c in convs:
         cid = c.get("conversationId")
         if cid and cid in seen:
             continue
         if cid:
             seen.add(cid)
-        fila.append(c)
+        total += 1
+        dcri = (c.get("createdAt") or (c.get("conversation") or {}).get("createdAt") or "")[:10]
+        if dcri and dcri >= desde:
+            fila.append(c)
     buckets = {"lead_sem_oport_frio": 0, "lead_sem_oport_crosssell": 0, "lead_andamento": 0,
                "cliente_operacional": 0, "ruido": 0, "revisar": 0, "sem_telefone": 0, "pendente_leitura": 0}
     origem_tot = {}
@@ -267,6 +272,8 @@ def run_orfaos(max_msg=130):
         "opps_crm": n_opps,
         "opp_fones_n": len(opp_fones),
         "comprou_fones_n": len(comprou_fones),
+        "desde": desde,
+        "fila_total": total,
         "fila_viva": len(fila),
         "fila_com_fone": len(fila) - buckets["sem_telefone"],
         "match_opp": buckets["cliente_operacional"] + buckets["lead_andamento"],

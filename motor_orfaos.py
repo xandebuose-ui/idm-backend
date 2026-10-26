@@ -93,24 +93,62 @@ def _patient_fones(uuid):
     time.sleep(0.22)
     return fones
 
+def _fones_do_registro(p):
+    fs = set()
+    ph = p.get("phone")
+    if isinstance(ph, dict):
+        ph = ph.get("number") or ph.get("phone")
+    f = _fone(ph)
+    if f:
+        fs.add(f)
+    for c in (p.get("contacts") or []):
+        v = None
+        if isinstance(c, dict):
+            v = c.get("phone") or c.get("number") or c.get("value") or c.get("content")
+            if isinstance(v, dict):
+                v = v.get("number")
+        elif isinstance(c, str):
+            v = c
+        f = _fone(v)
+        if f:
+            fs.add(f)
+    return fs
+
 def _indice_ce():
+    # 1) VARREDURA EM LOTE de pacientes (1 passada paginada, sem 296 chamadas)
+    pat_map = {}
+    com_fone = 0
+    pats = mf.api_all("patients?per_page=100", cap_pages=80)
+    for p in pats:
+        u = p.get("uuid")
+        if not u:
+            continue
+        fs = _fones_do_registro(p)
+        pat_map[u] = fs
+        if fs:
+            com_fone += 1
+    # 2) oportunidades -> casa por uuid no mapa do lote
     opp_fones, comprou_fones = set(), set()
-    diag = {"tem_patient_uuid": 0, "patient_phone_hit": 0}
     opps = mf.api_all("crm/opportunities?sort_column=created_at&sort_direction=desc")
+    match, semfone, fallback = 0, 0, 0
     for o in opps:
-        p = o.get("patient") or {}
-        if not p.get("uuid"):
+        u = (o.get("patient") or {}).get("uuid")
+        fs = pat_map.get(u)
+        if fs is None and u:
+            fs = _patient_fones(u)  # fallback detalhe (paciente fora do lote)
+            fallback += 1
+        if not fs:
+            semfone += 1
             continue
-        diag["tem_patient_uuid"] += 1
-        fones = _patient_fones(p["uuid"])
-        if not fones:
-            continue
-        diag["patient_phone_hit"] += 1
-        opp_fones |= fones
+        match += 1
+        opp_fones |= fs
         pipe = (o.get("pipeline") or {}).get("name") or ""
         stage = (o.get("stage") or {}).get("name") or ""
         if pipe.upper().startswith("CLIENTES") or stage.startswith("Ganho"):
-            comprou_fones |= fones
+            comprou_fones |= fs
+    diag = {"n_patients_lote": len(pats), "patients_com_fone": com_fone,
+            "opps": len(opps), "opp_com_fone": match, "opp_sem_fone": semfone,
+            "fallback_detalhe": fallback}
     return opp_fones, comprou_fones, len(opps), diag
 
 def run_orfaos(max_msg=220):

@@ -61,17 +61,49 @@ def _lista(status, cap=600):
 _RUIDO = re.compile(r"confirme o seu hor|j. est. reservad|uhuull|para confirmar o agendamento|seu agendamento foi|lembrete de agendamento|avalia..o de atendimento|pesquisa de satisfa", re.I)
 _FORN = re.compile(r"represent|fornecedor|parceria|cat.logo|tabela de pre|revenda|distribuidor|tem mais clientes|divulga|antecipa..o de recebi", re.I)
 
+_MSG_CACHE = {}
+
 def _primeira_msg(conv_id):
+    if conv_id in _MSG_CACHE:
+        return _MSG_CACHE[conv_id]
     data, err = _cc("/conversation/messages/%s?from=0&to=25&orderBy=createdAt%%3AASC&filters=%%7B%%7D" % conv_id)
     if err or not data:
+        time.sleep(0.3)
         return None
     items = [m for m in (data.get("conversationItems") or []) if m.get("senderType") == "contacts"]
     items.sort(key=lambda m: m.get("date") or "")
+    msg = ""
     for m in items:
         t = (m.get("content") or m.get("audioTextContent") or "").strip()
         if t:
-            return t
-    return None
+            msg = t
+            break
+    _MSG_CACHE[conv_id] = msg
+    time.sleep(0.4)
+    return msg
+
+def _classifica_origem(msg, ct):
+    t = " " + (msg or "").lower() + " "
+    def has(*ks):
+        return any(k in t for k in ks)
+    if has("vi o anuncio", "vi o an\u00fancio", "vim pelo anuncio", "vim pelo an\u00fancio",
+           "do anuncio", "do an\u00fancio", "pelo anuncio", "pelo an\u00fancio",
+           "anuncio de pos", "an\u00fancio de p\u00f3s",
+           "quais sao os procedimentos de pos", "quais s\u00e3o os procedimentos de p\u00f3s"):
+        return "trafego_pago"
+    if has("da bio", "pagina bio", "p\u00e1gina bio", "link da bio", "vim da bio", "sua pagina bio", "sua p\u00e1gina bio"):
+        return "organico_bio"
+    if has("indica", "indicou", "indicaram", "fui indicad", "me indic"):
+        return "relacionamento_indicacao"
+    if has("pelo site", "no site", "pelo seu site", "do site"):
+        return "organico_site"
+    if has("no google", "pelo google", "pesquisei no google", "achei no google"):
+        return "organico_google"
+    if has("instagram", "direct", " insta "):
+        return "organico_instagram"
+    if ct.get("instagramIgId") or ct.get("instagramUsername"):
+        return "organico_instagram"
+    return "nao_informada"
 
 _PAT_CACHE = {}
 
@@ -160,7 +192,7 @@ def _indice_ce():
             "opp_nomes_n": len(opp_nomes)}
     return opp_fones, comprou_fones, opp_nomes, len(opps), diag
 
-def run_orfaos(max_msg=220):
+def run_orfaos(max_msg=130):
     t0 = time.time()
     opp_fones, comprou_fones, opp_nomes, n_opps, idx_diag = _indice_ce()
     convs = _lista("inbox") + _lista("waiting")
@@ -172,8 +204,10 @@ def run_orfaos(max_msg=220):
         if cid:
             seen.add(cid)
         fila.append(c)
-    buckets = {"orfao_frio": 0, "orfao_crosssell": 0, "lead_andamento": 0,
-               "cliente_operacional": 0, "ruido": 0, "revisar": 0, "sem_telefone": 0, "nao_avaliado": 0}
+    buckets = {"lead_sem_oport_frio": 0, "lead_sem_oport_crosssell": 0, "lead_andamento": 0,
+               "cliente_operacional": 0, "ruido": 0, "revisar": 0, "sem_telefone": 0, "pendente_leitura": 0}
+    origem_tot = {}
+    novas_leituras = 0
     cand, itens = [], []
     for c in fila:
         ct = c.get("contact") or {}
@@ -192,32 +226,41 @@ def run_orfaos(max_msg=220):
             buckets["cliente_operacional" if comprou else "lead_andamento"] += 1
             continue
         cand.append((c, f, comprou))
-    for c, f, comprou in cand[:max_msg]:
+    for c, f, comprou in cand:
+        cid = c.get("conversationId")
         ct = c.get("contact") or {}
-        msg = _primeira_msg(c.get("conversationId")) or ""
+        ja = cid in _MSG_CACHE
+        if not ja and novas_leituras >= max_msg:
+            buckets["pendente_leitura"] += 1
+            continue
+        if not ja:
+            novas_leituras += 1
+        msg = _primeira_msg(cid) or ""
         low = msg.lower()
         if not low.strip():
-            buckets["revisar"] += 1
-            bucket = "revisar"
-        elif _RUIDO.search(low):
+            buckets["pendente_leitura"] += 1
+            continue
+        if _RUIDO.search(low):
             buckets["ruido"] += 1
             continue
-        elif _FORN.search(low):
+        if _FORN.search(low):
             buckets["revisar"] += 1
             bucket = "revisar"
         else:
-            bucket = "orfao_crosssell" if comprou else "orfao_frio"
+            bucket = "lead_sem_oport_crosssell" if comprou else "lead_sem_oport_frio"
             buckets[bucket] += 1
+        origem = _classifica_origem(msg, ct)
+        origem_tot[origem] = origem_tot.get(origem, 0) + 1
         itens.append({
-            "conversationId": c.get("conversationId"),
+            "conversationId": cid,
             "nome": ct.get("name"),
             "telefone": ct.get("phone") or c.get("identifier"),
             "tag": ", ".join([t.get("name", "") if isinstance(t, dict) else str(t) for t in (ct.get("tags") or [])]) or "-",
             "bucket": bucket,
+            "origem": origem,
             "primeira_msg": msg[:280],
             "comprou": comprou,
         })
-    buckets["nao_avaliado"] = max(0, len(cand) - max_msg)
     resumo = {
         "gerado_em": dt.datetime.now().isoformat(timespec="seconds"),
         "duracao_s": round(time.time() - t0, 1),
@@ -228,7 +271,9 @@ def run_orfaos(max_msg=220):
         "fila_com_fone": len(fila) - buckets["sem_telefone"],
         "match_opp": buckets["cliente_operacional"] + buckets["lead_andamento"],
         "candidatos_sem_opp": len(cand),
-        "avaliados_msg": min(len(cand), max_msg),
+        "novas_leituras": novas_leituras,
+        "cache_msgs": len(_MSG_CACHE),
+        "origem": origem_tot,
         "buckets": buckets,
         "diag_idx": idx_diag,
     }

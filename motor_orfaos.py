@@ -115,7 +115,6 @@ def _fones_do_registro(p):
     return fs
 
 def _indice_ce():
-    # 1) VARREDURA EM LOTE de pacientes (1 passada paginada, sem 296 chamadas)
     pat_map = {}
     com_fone = 0
     pats = mf.api_all("patients?per_page=100", cap_pages=80)
@@ -127,16 +126,30 @@ def _indice_ce():
         pat_map[u] = fs
         if fs:
             com_fone += 1
-    # 2) oportunidades -> casa por uuid no mapa do lote
     opp_fones, comprou_fones = set(), set()
     opps = mf.api_all("crm/opportunities?sort_column=created_at&sort_direction=desc")
-    match, semfone, fallback = 0, 0, 0
+    match, semfone, det_try, det_ok = 0, 0, 0, 0
+    diag = {}
     for o in opps:
         u = (o.get("patient") or {}).get("uuid")
-        fs = pat_map.get(u)
-        if fs is None and u:
-            fs = _patient_fones(u)  # fallback detalhe (paciente fora do lote)
-            fallback += 1
+        fs = pat_map.get(u) or set()
+        if not fs and o.get("uuid") and det_try < 200:
+            det_try += 1
+            det = mf.api("crm/opportunities/" + o["uuid"])
+            dd = det.get("data") or det
+            if isinstance(dd, dict):
+                if not diag.get("sample_opp_det_keys"):
+                    diag["sample_opp_det_keys"] = sorted(list(dd.keys()))[:45]
+                fs = _fones_do_registro(dd)
+                if not fs:
+                    for sub in ("patient", "customer", "contact", "lead", "person"):
+                        sv = dd.get(sub)
+                        if isinstance(sv, dict):
+                            fs = _fones_do_registro(sv)
+                            if fs:
+                                break
+                if fs:
+                    det_ok += 1
         if not fs:
             semfone += 1
             continue
@@ -146,9 +159,9 @@ def _indice_ce():
         stage = (o.get("stage") or {}).get("name") or ""
         if pipe.upper().startswith("CLIENTES") or stage.startswith("Ganho"):
             comprou_fones |= fs
-    diag = {"n_patients_lote": len(pats), "patients_com_fone": com_fone,
-            "opps": len(opps), "opp_com_fone": match, "opp_sem_fone": semfone,
-            "fallback_detalhe": fallback}
+    diag.update({"n_patients_lote": len(pats), "patients_com_fone": com_fone,
+                 "opps": len(opps), "opp_com_fone": match, "opp_sem_fone": semfone,
+                 "opp_det_try": det_try, "opp_det_ok": det_ok})
     return opp_fones, comprou_fones, len(opps), diag
 
 def run_orfaos(max_msg=220):

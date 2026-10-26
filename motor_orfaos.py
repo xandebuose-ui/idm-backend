@@ -1,12 +1,22 @@
 # -*- coding: utf-8 -*-
 # IDM - Motor de Orfaos (Bloco B). Conversa (CliniChat) e a fonte de verdade.
 # So-leitura. PII (nome/telefone) vai SO pro Firestore trancado, nunca pro repo publico.
-import os, re, json, time, datetime as dt
+import os, re, json, time, unicodedata, datetime as dt
 import urllib.request, urllib.error, urllib.parse
 import motor_fila as mf
 import firebase_writer as fw
 
 CLINI = "https://clinichat.clinicaexperts.com.br"
+
+def _norm_nome(s):
+    s = (s or "").strip().lower()
+    s = unicodedata.normalize("NFKD", s)
+    out = []
+    for c in s:
+        if unicodedata.combining(c):
+            continue
+        out.append(c if (c.isalpha() or c == " ") else " ")
+    return " ".join("".join(out).split())
 
 def _cc(path):
     tok = fw.get_token()
@@ -126,47 +136,33 @@ def _indice_ce():
         pat_map[u] = fs
         if fs:
             com_fone += 1
-    opp_fones, comprou_fones = set(), set()
+    opp_fones, comprou_fones, opp_nomes = set(), set(), {}
     opps = mf.api_all("crm/opportunities?sort_column=created_at&sort_direction=desc")
-    match, semfone, det_try, det_ok = 0, 0, 0, 0
-    diag = {}
+    match, semfone = 0, 0
     for o in opps:
         u = (o.get("patient") or {}).get("uuid")
         fs = pat_map.get(u) or set()
-        if not fs and o.get("uuid") and det_try < 200:
-            det_try += 1
-            det = mf.api("crm/opportunities/" + o["uuid"])
-            dd = det.get("data") or det
-            if isinstance(dd, dict):
-                if not diag.get("sample_opp_det_keys"):
-                    diag["sample_opp_det_keys"] = sorted(list(dd.keys()))[:45]
-                fs = _fones_do_registro(dd)
-                if not fs:
-                    for sub in ("patient", "customer", "contact", "lead", "person"):
-                        sv = dd.get(sub)
-                        if isinstance(sv, dict):
-                            fs = _fones_do_registro(sv)
-                            if fs:
-                                break
-                if fs:
-                    det_ok += 1
-        if not fs:
-            semfone += 1
-            continue
-        match += 1
-        opp_fones |= fs
         pipe = (o.get("pipeline") or {}).get("name") or ""
         stage = (o.get("stage") or {}).get("name") or ""
-        if pipe.upper().startswith("CLIENTES") or stage.startswith("Ganho"):
-            comprou_fones |= fs
-    diag.update({"n_patients_lote": len(pats), "patients_com_fone": com_fone,
-                 "opps": len(opps), "opp_com_fone": match, "opp_sem_fone": semfone,
-                 "opp_det_try": det_try, "opp_det_ok": det_ok})
-    return opp_fones, comprou_fones, len(opps), diag
+        comprou = pipe.upper().startswith("CLIENTES") or stage.startswith("Ganho")
+        if fs:
+            match += 1
+            opp_fones |= fs
+            if comprou:
+                comprou_fones |= fs
+        else:
+            semfone += 1
+            nm = _norm_nome((o.get("patient") or {}).get("name"))
+            if len(nm) >= 5 and " " in nm:
+                opp_nomes[nm] = opp_nomes.get(nm, False) or comprou
+    diag = {"n_patients_lote": len(pats), "patients_com_fone": com_fone,
+            "opps": len(opps), "opp_com_fone": match, "opp_sem_fone": semfone,
+            "opp_nomes_n": len(opp_nomes)}
+    return opp_fones, comprou_fones, opp_nomes, len(opps), diag
 
 def run_orfaos(max_msg=220):
     t0 = time.time()
-    opp_fones, comprou_fones, n_opps, idx_diag = _indice_ce()
+    opp_fones, comprou_fones, opp_nomes, n_opps, idx_diag = _indice_ce()
     convs = _lista("inbox") + _lista("waiting")
     seen, fila = set(), []
     for c in convs:
@@ -185,10 +181,17 @@ def run_orfaos(max_msg=220):
         if not f:
             buckets["sem_telefone"] += 1
             continue
-        if f in opp_fones:
-            buckets["cliente_operacional" if f in comprou_fones else "lead_andamento"] += 1
+        tem_opp = f in opp_fones
+        comprou = f in comprou_fones
+        if not tem_opp:
+            nm = _norm_nome(ct.get("name"))
+            if len(nm) >= 5 and " " in nm and nm in opp_nomes:
+                tem_opp = True
+                comprou = opp_nomes[nm]
+        if tem_opp:
+            buckets["cliente_operacional" if comprou else "lead_andamento"] += 1
             continue
-        cand.append((c, f, f in comprou_fones))
+        cand.append((c, f, comprou))
     for c, f, comprou in cand[:max_msg]:
         ct = c.get("contact") or {}
         msg = _primeira_msg(c.get("conversationId")) or ""

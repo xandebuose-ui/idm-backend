@@ -348,3 +348,23 @@ def jarbas_analise(conv_id: str, nome: str = "", temperatura: str = "", origem: 
     if not _jarbas_auth(authorization, x_idm_secret):
         raise HTTPException(status_code=401, detail="unauthorized")
     return _jarbas.analisar(conv_id, {"nome": nome, "temperatura": temperatura, "origem": origem})
+
+
+@app.get("/jarbas/teste")
+def jarbas_teste(x_idm_secret: str = Header(default="")):
+    # Smoke-test protegido: pega a 1a conversa real do inbox e roda o Jarbas.
+    if not WEBHOOK_SECRET or not hmac.compare_digest(x_idm_secret, WEBHOOK_SECRET):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    convs = _orf._lista("inbox", cap=80)
+    tentativas = 0
+    for c in convs:
+        cid = c.get("conversationId")
+        if not cid:
+            continue
+        tentativas += 1
+        if tentativas > 15:
+            break
+        res = _jarbas.analisar(cid, {"nome": (c.get("contact") or {}).get("name") or "", "temperatura": "", "origem": ""})
+        if res.get("ok"):
+            return {"usou_conv": cid, "tentativas": tentativas, "analise": res}
+    return {"ok": False, "motivo": "nenhuma conversa analisavel no inbox", "tentativas": tentativas}

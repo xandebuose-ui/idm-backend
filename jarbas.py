@@ -132,9 +132,10 @@ def classifica_temp(conv_id, modelo):
     try:
         import anthropic
         cli = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-        msg = cli.messages.create(model=modelo, max_tokens=180, system=_TEMP_SYS,
-                                  messages=[{"role": "user", "content": user}])
-        txt = "".join(getattr(b, "text", "") for b in msg.content)
+        msg = cli.messages.create(model=modelo, max_tokens=400, system=_TEMP_SYS,
+                                  messages=[{"role": "user", "content": user},
+                                            {"role": "assistant", "content": "{"}])
+        txt = "{" + "".join(getattr(b, "text", "") for b in msg.content)
         return _parse_json(txt)
     except Exception as e:
         return {"temperatura": "erro", "motivo": str(e)[:120]}

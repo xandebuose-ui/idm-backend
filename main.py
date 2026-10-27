@@ -371,19 +371,28 @@ def jarbas_teste(x_idm_secret: str = Header(default="")):
 
 
 def _jarbas_smoke():
+    import os as _os, json as _json
     try:
-        convs = _orf._lista("inbox", cap=60)
+        import anthropic
+        cli = anthropic.Anthropic(api_key=_os.environ.get("ANTHROPIC_API_KEY", ""))
+        ms = [m.id for m in cli.models.list(limit=25).data]
+        print("[JARBAS-TESTE] modelos_disponiveis:", ms)
+    except Exception as e:
+        print("[JARBAS-TESTE] erro_listar_modelos:", repr(e))
+    try:
+        convs = _orf._lista("inbox", cap=40)
         for c in convs:
             cid = c.get("conversationId")
             if not cid:
                 continue
+            linhas, _ld = _jarbas._transcript(cid)
+            if not linhas:
+                continue
             res = _jarbas.analisar(cid, {"nome": (c.get("contact") or {}).get("name") or ""})
-            if res.get("ok"):
-                print("[JARBAS-TESTE] conv=%s\nDIAG=%s\nCOND=%s\nMSG=%s" % (
-                    cid, res.get("diagnostico"), res.get("conducao"), res.get("mensagem")))
-                return
-        print("[JARBAS-TESTE] nenhuma conversa analisavel no inbox")
+            print("[JARBAS-TESTE] conv=%s res=%s" % (cid, _json.dumps(res, ensure_ascii=False)[:1500]))
+            return
+        print("[JARBAS-TESTE] nenhuma conversa com transcript legivel")
     except Exception as e:
         print("[JARBAS-TESTE] erro:", repr(e))
 
-threading.Timer(15, _jarbas_smoke).start()
+threading.Timer(12, _jarbas_smoke).start()

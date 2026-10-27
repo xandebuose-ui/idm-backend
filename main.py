@@ -368,37 +368,3 @@ def jarbas_teste(x_idm_secret: str = Header(default="")):
         if res.get("ok"):
             return {"usou_conv": cid, "tentativas": tentativas, "analise": res}
     return {"ok": False, "motivo": "nenhuma conversa analisavel no inbox", "tentativas": tentativas}
-
-
-@app.get("/jarbas/diag")
-def jarbas_diag():
-    # TEMPORARIO/publico: lista modelos validos + roda 1 analise real. Remover apos o teste.
-    import os as _os
-    info = {}
-    try:
-        import anthropic
-        cli = anthropic.Anthropic(api_key=_os.environ.get("ANTHROPIC_API_KEY", ""))
-        info["modelos"] = [m.id for m in cli.models.list(limit=30).data]
-    except Exception as e:
-        info["modelos_erro"] = repr(e)
-    info["modelo_configurado"] = _os.environ.get("JARBAS_MODEL", "(default no codigo)")
-    try:
-        convs = _orf._lista("inbox", cap=40)
-        achou = False
-        for c in convs:
-            cid = c.get("conversationId")
-            if not cid:
-                continue
-            linhas, _ld = _jarbas._transcript(cid)
-            if not linhas:
-                continue
-            info["usou_conv"] = cid
-            info["n_linhas"] = len(linhas)
-            info["analise"] = _jarbas.analisar(cid, {"nome": (c.get("contact") or {}).get("name") or ""})
-            achou = True
-            break
-        if not achou:
-            info["analise"] = "nenhuma conversa com transcript legivel"
-    except Exception as e:
-        info["analise_erro"] = repr(e)
-    return info

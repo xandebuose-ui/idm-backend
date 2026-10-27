@@ -370,17 +370,21 @@ def jarbas_teste(x_idm_secret: str = Header(default="")):
     return {"ok": False, "motivo": "nenhuma conversa analisavel no inbox", "tentativas": tentativas}
 
 
-def _jarbas_smoke():
-    import os as _os, json as _json
+@app.get("/jarbas/diag")
+def jarbas_diag():
+    # TEMPORARIO/publico: lista modelos validos + roda 1 analise real. Remover apos o teste.
+    import os as _os
+    info = {}
     try:
         import anthropic
         cli = anthropic.Anthropic(api_key=_os.environ.get("ANTHROPIC_API_KEY", ""))
-        ms = [m.id for m in cli.models.list(limit=25).data]
-        print("[JARBAS-TESTE] modelos_disponiveis:", ms)
+        info["modelos"] = [m.id for m in cli.models.list(limit=30).data]
     except Exception as e:
-        print("[JARBAS-TESTE] erro_listar_modelos:", repr(e))
+        info["modelos_erro"] = repr(e)
+    info["modelo_configurado"] = _os.environ.get("JARBAS_MODEL", "(default no codigo)")
     try:
         convs = _orf._lista("inbox", cap=40)
+        achou = False
         for c in convs:
             cid = c.get("conversationId")
             if not cid:
@@ -388,11 +392,13 @@ def _jarbas_smoke():
             linhas, _ld = _jarbas._transcript(cid)
             if not linhas:
                 continue
-            res = _jarbas.analisar(cid, {"nome": (c.get("contact") or {}).get("name") or ""})
-            print("[JARBAS-TESTE] conv=%s res=%s" % (cid, _json.dumps(res, ensure_ascii=False)[:1500]))
-            return
-        print("[JARBAS-TESTE] nenhuma conversa com transcript legivel")
+            info["usou_conv"] = cid
+            info["n_linhas"] = len(linhas)
+            info["analise"] = _jarbas.analisar(cid, {"nome": (c.get("contact") or {}).get("name") or ""})
+            achou = True
+            break
+        if not achou:
+            info["analise"] = "nenhuma conversa com transcript legivel"
     except Exception as e:
-        print("[JARBAS-TESTE] erro:", repr(e))
-
-threading.Timer(12, _jarbas_smoke).start()
+        info["analise_erro"] = repr(e)
+    return info

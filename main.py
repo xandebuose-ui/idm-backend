@@ -369,3 +369,34 @@ def jarbas_teste(x_idm_secret: str = Header(default="")):
         if res.get("ok"):
             return {"usou_conv": cid, "tentativas": tentativas, "analise": res}
     return {"ok": False, "motivo": "nenhuma conversa analisavel no inbox", "tentativas": tentativas}
+
+
+_DIF = {}
+
+@app.get("/jarbas/difteste")
+def jarbas_difteste(fresh: int = 0):
+    # TEMPORARIO/publico: acha 3 leads de pos-op e compara Haiku x Sonnet na temperatura. Remover depois.
+    import re as _re
+    if _DIF.get("leads") and not fresh:
+        return {"cache": True, **_DIF}
+    POS = _re.compile(r"p[oracle]s[ -]?op|operat[oó]rio|cirurgia|lipo|abdominoplast|lipoaspira|pr[oó]tese|mamoplast|silicone|lifting|fiz (a )?cir|vou fazer|operei|drenagem", _re.I)
+    convs = _orf._lista("inbox", cap=50)
+    achados = []
+    for c in convs:
+        cid = c.get("conversationId")
+        if not cid:
+            continue
+        fm = _orf._primeira_msg(cid) or ""
+        if fm and POS.search(fm):
+            achados.append((cid, (c.get("contact") or {}).get("name") or "", fm[:120]))
+        if len(achados) >= 3:
+            break
+    out = []
+    for cid, nome, fm in achados:
+        out.append({
+            "nome": nome, "conv": cid, "primeira_msg": fm,
+            "haiku": _jarbas.classifica_temp(cid, "claude-haiku-5-5"),
+            "sonnet": _jarbas.classifica_temp(cid, "claude-sonnet-5-5"),
+        })
+    _DIF.clear(); _DIF.update({"encontrados": len(achados), "leads": out})
+    return {"cache": False, **_DIF}

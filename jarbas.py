@@ -111,3 +111,30 @@ def analisar(conv_id, meta=None):
     _cache_set(conv_id, {"analise": analise, "last_date": last_date,
                          "gerado_em": int(time.time()), "modelo": _MODEL})
     return {"ok": True, "cache": False, "conv_id": conv_id, **analise}
+
+
+_TEMP_SYS = (
+    "Voce e um vendedor experiente do Instituto Mafra (clinica de pos-operatorio e estetica). "
+    "Leia a conversa (Cliente = o lead; Atendente = a clinica) e julgue a TEMPERATURA do lead como um vendedor faria, "
+    "lendo a intencao real, nao so palavras-chave:\n"
+    "- quente: demonstra prontidao (pede preco/valor/agendar/marcar/horario, diz quero/como faco/fechar) OU a ultima "
+    "mensagem e do cliente aguardando resposta com interesse real.\n"
+    "- morno: tem interesse mas sem urgencia nem data; esfriou ou aguarda sem sinal forte.\n"
+    "- frio: sem engajamento real, parado ou sumiu.\n"
+    "Responda SOMENTE um JSON: {\"temperatura\":\"quente|morno|frio\",\"motivo\":\"frase curta\"}."
+)
+
+def classifica_temp(conv_id, modelo):
+    linhas, _ld = _transcript(conv_id, max_msgs=25)
+    if not linhas:
+        return {"temperatura": "frio", "motivo": "sem conversa legivel"}
+    user = "Conversa (Cliente = o lead):\n" + "\n".join(linhas[-40:])
+    try:
+        import anthropic
+        cli = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+        msg = cli.messages.create(model=modelo, max_tokens=180, system=_TEMP_SYS,
+                                  messages=[{"role": "user", "content": user}])
+        txt = "".join(getattr(b, "text", "") for b in msg.content)
+        return _parse_json(txt)
+    except Exception as e:
+        return {"temperatura": "erro", "motivo": str(e)[:120]}

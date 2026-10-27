@@ -56,7 +56,7 @@ def _startup():
     sched = BackgroundScheduler(timezone="America/Sao_Paulo")
     sched.add_job(lambda: _rodar("poll"), "interval", minutes=POLL_MINUTES)
     sched.add_job(_vigia_cracha, "interval", minutes=30)
-    sched.add_job(lambda: _rodar_orfaos("poll"), "interval", minutes=15)
+    sched.add_job(lambda: _rodar_orfaos("poll"), "interval", minutes=5)
     try:
         _vigia_cracha()
     except Exception:
@@ -98,7 +98,8 @@ async def webhook(request: Request, x_idm_secret: str = Header(default="")):
         raise HTTPException(status_code=401, detail="unauthorized")
     body = await request.json()
     evento = (body.get("event") or body.get("type") or "").lower()
-    if any(k in evento for k in ("patient", "booking", "opportunity", "lead", "crm")):
+    if any(k in evento for k in ("patient", "booking", "opportunity", "lead", "crm", "message", "chat", "conversation", "ticket")):
+        threading.Thread(target=_rodar_orfaos, args=("webhook",), daemon=True).start()
         return {"ok": True, "acionado": True, "detalhe": _rodar(f"webhook:{evento}")}
     return {"ok": True, "acionado": False, "evento": evento}
 

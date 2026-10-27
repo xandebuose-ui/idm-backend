@@ -379,7 +379,7 @@ def jarbas_difteste(fresh: int = 0):
     import re as _re
     if _DIF.get("leads") and not fresh:
         return {"cache": True, **_DIF}
-    POS = _re.compile(r"p[oracle]s[ -]?op|operat[oó]rio|cirurgia|lipo|abdominoplast|lipoaspira|pr[oó]tese|mamoplast|silicone|lifting|fiz (a )?cir|vou fazer|operei|drenagem", _re.I)
+    POS = _re.compile(r"p[oó]s[ -]?op|operat[oó]rio|cirurgia|lipo|abdominoplast|lipoaspira|pr[oó]tese|mamoplast|silicone|lifting|fiz (a )?cir|vou fazer|operei|drenagem", _re.I)
     convs = _orf._lista("inbox", cap=50)
     achados = []
     for c in convs:

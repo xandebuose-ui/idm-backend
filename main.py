@@ -69,6 +69,7 @@ def _startup():
         pass
     try:
         threading.Timer(25, lambda: _rodar_termometro("startup")).start()
+        threading.Timer(95, _auditar_quentes).start()
     except Exception:
         pass
     print(f"[startup] poll {POLL_MINUTES}min; vigia cracha 30min; orfaos 15min")
@@ -435,6 +436,28 @@ def _rodar_termometro(motivo="poll"):
         print("[termometro] erro:", repr(e)); return {"ok": False, "erro": str(e)[:140]}
     finally:
         _term_lock.release()
+
+def _auditar_quentes():
+    """One-shot: loga nos logs do Render a conversa real dos quentes, pra calibracao. Sem PII em URL."""
+    import time as _t
+    for _ in range(40):
+        if _TERM.get("result"): break
+        _t.sleep(3)
+    res = _TERM.get("result") or {}
+    quentes = (res.get("quente") or [])[:4]
+    print("[AUDITA] ===== %d quentes para auditoria de calibracao =====" % len(quentes), flush=True)
+    for q in quentes:
+        cid = q.get("conv")
+        try:
+            linhas, _ld = _jarbas._transcript(cid, max_msgs=25)
+        except Exception as e:
+            print("[AUDITA] conv %s ERRO transcript: %r" % (cid, e), flush=True); continue
+        print("[AUDITA] ---- conv=%s | Haiku=QUENTE | motivo: %s" % (cid, (q.get("motivo") or "")[:160]), flush=True)
+        if not linhas:
+            print("[AUDITA]   (sem conversa legivel)", flush=True); continue
+        for ln in linhas[-14:]:
+            print("[AUDITA]   " + str(ln)[:240], flush=True)
+    print("[AUDITA] ===== fim =====", flush=True)
 
 @app.get("/termometro.json")
 def termometro_publico():

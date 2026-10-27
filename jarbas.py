@@ -10,7 +10,7 @@ import os, json, time
 import motor_orfaos as _orf   # reusa _cc() e CLINI (leitura autenticada do CliniChat)
 import firebase_writer as _fw # reusa _get_db() (Firestore)
 
-_MODEL = os.environ.get("JARBAS_MODEL", "claude-sonnet-4-5")
+_MODEL = os.environ.get("JARBAS_MODEL", "claude-sonnet-5-5")
 _MAXTOK = int(os.environ.get("JARBAS_MAXTOK", "1200"))
 _CEREBRO_PATH = os.environ.get("JARBAS_CEREBRO", "jarbas_cerebro_v1.md")
 _CACHE_COLL = os.environ.get("JARBAS_CACHE_COLL", "jarbas_analises")
@@ -67,7 +67,7 @@ def _chamar_modelo(system, user):
     import anthropic
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     msg = client.messages.create(
-        model=_MODEL, max_tokens=_MAXTOK, temperature=0.4,
+        model=_MODEL, max_tokens=_MAXTOK,
         system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": user}],
     )

@@ -131,7 +131,7 @@ def classifica_temp(conv_id, modelo):
     user = "Conversa (Cliente = o lead):\n" + "\n".join(linhas[-40:])
     try:
         import anthropic
-        cli = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+        cli = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=1, timeout=30)
         msg = cli.messages.create(model=modelo, max_tokens=400, system=_TEMP_SYS,
                                   messages=[{"role": "user", "content": user}])
         txt = "".join(getattr(b, "text", "") for b in msg.content)

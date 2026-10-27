@@ -391,9 +391,11 @@ def _rodar_termometro(motivo="poll"):
     if not _term_lock.acquire(blocking=False):
         return {"ok": True, "skip": "ja rodando"}
     try:
-        convs = _orf._lista("inbox", cap=60)
-        baldes = {"quente": [], "morno": [], "frio": []}
-        novas = 0
+        print("[termometro] iniciando passada (%s)" % motivo)
+        convs = _orf._lista("inbox", cap=80)
+        orc = int(os.environ.get("TERM_BATCH", "12"))
+        baldes = {"quente": [], "morno": [], "frio": [], "pendente": []}
+        feitas = 0
         for c in convs:
             cid = c.get("conversationId")
             if not cid:
@@ -401,12 +403,15 @@ def _rodar_termometro(motivo="poll"):
             ct = c.get("contact") or {}
             lt = c.get("lastMessageTime") or (c.get("conversation") or {}).get("lastActivityTime") or ""
             cache = _TERM_CACHE.get(cid)
-            if cache and lt and cache[0] == lt:
+            if cache and (not lt or cache[0] == lt):
+                cls = cache[1]
+            elif feitas < orc:
+                cls = _jarbas.classifica_temp(cid, _TEMP_MODEL)
+                _TERM_CACHE[cid] = (lt, cls); feitas += 1; _t.sleep(0.4)
+            elif cache:
                 cls = cache[1]
             else:
-                cls = _jarbas.classifica_temp(cid, _TEMP_MODEL)
-                _TERM_CACHE[cid] = (lt, cls); novas += 1
-                _t.sleep(0.3)
+                cls = {"temperatura": "pendente", "motivo": "aguardando classificacao"}
             t = cls.get("temperatura")
             if t not in baldes:
                 t = "frio"
@@ -414,7 +419,7 @@ def _rodar_termometro(motivo="poll"):
                               "telefone": ct.get("phone") or c.get("identifier"),
                               "motivo": cls.get("motivo", "")})
         res = {"gerado_em": _sp_now().isoformat(timespec="seconds"), "total": len(convs),
-               "novas_classificacoes": novas,
+               "classificadas_no_ciclo": feitas, "em_cache": len(_TERM_CACHE),
                "contagem": {k: len(v) for k, v in baldes.items()}, **baldes}
         _TERM["result"] = res; _TERM["quando"] = res["gerado_em"]
         try:
@@ -424,7 +429,7 @@ def _rodar_termometro(motivo="poll"):
                 db.collection(os.environ.get("TERM_COLL", "escuta_termometro")).document("atual").set(res)
         except Exception as e:
             print("[termometro] firestore erro:", e)
-        print("[termometro] %s | novas=%d" % (res["contagem"], novas))
+        print("[termometro] %s | ciclo=%d cache=%d" % (res["contagem"], feitas, len(_TERM_CACHE)))
         return res
     except Exception as e:
         print("[termometro] erro:", repr(e)); return {"ok": False, "erro": str(e)[:140]}

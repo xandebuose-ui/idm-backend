@@ -68,7 +68,7 @@ def _chamar_modelo(system, user):
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     msg = client.messages.create(
         model=_MODEL, max_tokens=_MAXTOK, temperature=0.4,
-        system=system,
+        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": user}],
     )
     return "".join(getattr(b, "text", "") for b in msg.content)

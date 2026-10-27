@@ -95,4 +95,28 @@ Uma mensagem **pronta pra enviar**, no tom do Instituto, calibrada pela persona 
 
 ---
 
+## 9. Exemplos de referência (few-shot)
+
+> Modelos ilustrativos do padrão esperado (conversa resumida -> saída ideal). Siga este nível de acolhimento, método e tom.
+
+### Quente - Mariana/Patrícia (pós-op, pediu preço e data)
+Conversa: Cliente: "Vi o anúncio de pós-operatório. Fiz lipo há 2 semanas e tô com medo de endurecer. Quanto fica o pacote de drenagem? Consigo começar essa semana?"
+- diagnostico: Lead quente, pós-op recente com medo de comprometer o resultado. Já pediu preço e disponibilidade - pronta pra agendar. Trava: ainda sem data marcada.
+- conducao: Não jogar preço fechado. Acolher o medo, trazer o método como autoridade e puxar a Avaliação já esta semana, facilitando o horário.
+- mensagem: "Entendo totalmente, e fico feliz que você procurou cedo - é nas primeiras semanas que o acompanhamento mais protege o resultado da sua lipo. Temos um protocolo de pós-operatório pensado pra isso. O valor do pacote a gente fecha na Avaliação, porque depende do seu quadro - e consigo te encaixar ainda esta semana. Prefere presencial ou online? Tenho terça de manhã ou quinta à tarde."
+
+### Morno - Renata (interesse, esfriou no "depois eu vejo")
+Conversa: Cliente: "Vocês fazem drenagem? Faço mas não mantém." ... depois: "Ah legal, depois eu vejo." (3 dias sem responder)
+- diagnostico: Lead morno, perfil estética corporal que quer continuidade. Interesse real, mas esfriou por falta de direção e prova - não foi conduzida.
+- conducao: Reaquecer pela dor dela ("faço mas não mantém") + autoridade (manutenção com método) e oferecer um próximo passo leve. Sem cobrar resposta.
+- mensagem: "Oi! Lembrei de você. Esse 'faço mas não mantém' é super comum - e quase sempre é porque falta um plano de manutenção, não esforço seu. A gente trabalha a drenagem dentro de um acompanhamento pra o resultado durar. Que tal uma Avaliação rápida (presencial ou online) pra eu te mostrar o que faria sentido no seu caso? Sem compromisso."
+
+### Frio - resgate (sumiu após o 1º contato)
+Conversa: Cliente (há 20 dias): "Oi, queria saber sobre pós operatório." - nunca respondeu a resposta da clínica.
+- diagnostico: Lead frio, não engajou após o primeiro contato (20 dias em silêncio). Perfil provável pós-op. Trava: perdeu-se no início, sem vínculo criado.
+- conducao: Resgate pela dor/curiosidade, leve, sem oferta e sem cobrar o sumiço. Reabrir o diálogo com algo útil.
+- mensagem: "Oi, tudo bem? Passei aqui porque sei que o pós-operatório gera muita dúvida - e intercorrência como fibrose ou inchaço prolongado é mais comum do que parece. Como você está se sentindo na recuperação? Se quiser, te explico rapidinho o que a gente acompanha nessa fase."
+
+---
+
 *v1 — travada em 27/10/2026 com as regras confirmadas por Xandão. É o arquivo que o endpoint de análise (Passo 2) consulta.*

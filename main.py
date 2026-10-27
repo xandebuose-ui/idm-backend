@@ -368,3 +368,22 @@ def jarbas_teste(x_idm_secret: str = Header(default="")):
         if res.get("ok"):
             return {"usou_conv": cid, "tentativas": tentativas, "analise": res}
     return {"ok": False, "motivo": "nenhuma conversa analisavel no inbox", "tentativas": tentativas}
+
+
+def _jarbas_smoke():
+    try:
+        convs = _orf._lista("inbox", cap=60)
+        for c in convs:
+            cid = c.get("conversationId")
+            if not cid:
+                continue
+            res = _jarbas.analisar(cid, {"nome": (c.get("contact") or {}).get("name") or ""})
+            if res.get("ok"):
+                print("[JARBAS-TESTE] conv=%s\nDIAG=%s\nCOND=%s\nMSG=%s" % (
+                    cid, res.get("diagnostico"), res.get("conducao"), res.get("mensagem")))
+                return
+        print("[JARBAS-TESTE] nenhuma conversa analisavel no inbox")
+    except Exception as e:
+        print("[JARBAS-TESTE] erro:", repr(e))
+
+threading.Timer(15, _jarbas_smoke).start()

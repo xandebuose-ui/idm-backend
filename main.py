@@ -249,7 +249,7 @@ def cracha_status_publico():
 from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://app.clinicaexperts.com.br"],
+    allow_origins=[o.strip() for o in os.environ.get("ALLOW_ORIGINS","https://app.clinicaexperts.com.br,https://instituto-mafra-sistema.netlify.app").split(",") if o.strip()],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -321,3 +321,30 @@ def run_orfaos_now(x_idm_secret: str = Header(default="")):
 @app.get("/orfaos.json")
 def orfaos_json():
     return {"ok": True, "quando": _last_orf["quando"], "result": _last_orf["result"]}
+
+
+# ---- Jarbas: analise por lead (sob demanda; modelo via JARBAS_MODEL) ----
+import jarbas as _jarbas
+
+def _jarbas_auth(authorization: str, x_idm_secret: str) -> bool:
+    # admin/teste: header secreto == WEBHOOK_SECRET
+    if WEBHOOK_SECRET and x_idm_secret and hmac.compare_digest(x_idm_secret, WEBHOOK_SECRET):
+        return True
+    # navegador: Firebase ID token (Bearer) de usuario autenticado do projeto
+    if authorization.startswith("Bearer "):
+        tok = authorization[7:].strip()
+        try:
+            from firebase_admin import auth as _fbauth
+            _fw._get_db()  # garante o app firebase inicializado
+            _fbauth.verify_id_token(tok)
+            return True
+        except Exception:
+            return False
+    return False
+
+@app.get("/jarbas/analise")
+def jarbas_analise(conv_id: str, nome: str = "", temperatura: str = "", origem: str = "",
+                   authorization: str = Header(default=""), x_idm_secret: str = Header(default="")):
+    if not _jarbas_auth(authorization, x_idm_secret):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    return _jarbas.analisar(conv_id, {"nome": nome, "temperatura": temperatura, "origem": origem})

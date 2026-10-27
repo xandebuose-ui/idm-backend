@@ -57,6 +57,7 @@ def _startup():
     sched.add_job(lambda: _rodar("poll"), "interval", minutes=POLL_MINUTES)
     sched.add_job(_vigia_cracha, "interval", minutes=30)
     sched.add_job(lambda: _rodar_orfaos("poll"), "interval", minutes=5)
+    sched.add_job(lambda: _rodar_termometro("poll"), "interval", minutes=5)
     try:
         _vigia_cracha()
     except Exception:
@@ -64,6 +65,10 @@ def _startup():
     sched.start()
     try:
         threading.Thread(target=_rodar_orfaos, args=("startup",), daemon=True).start()
+    except Exception:
+        pass
+    try:
+        threading.Timer(25, lambda: _rodar_termometro("startup")).start()
     except Exception:
         pass
     print(f"[startup] poll {POLL_MINUTES}min; vigia cracha 30min; orfaos 15min")
@@ -369,3 +374,72 @@ def jarbas_teste(x_idm_secret: str = Header(default="")):
         if res.get("ok"):
             return {"usou_conv": cid, "tentativas": tentativas, "analise": res}
     return {"ok": False, "motivo": "nenhuma conversa analisavel no inbox", "tentativas": tentativas}
+
+
+# ---- Termometro: Haiku classifica os leads do inbox em quente/morno/frio ----
+_TERM = {"result": None, "quando": None}
+_term_lock = threading.Lock()
+_TERM_CACHE = {}
+_TEMP_MODEL = os.environ.get("JARBAS_TEMP_MODEL", "claude-haiku-5-5")
+
+def _rodar_termometro(motivo="poll"):
+    import time as _t
+    if motivo == "poll":
+        n = _sp_now(); mins = n.hour * 60 + n.minute
+        if mins < 510 or mins > 1200:
+            return {"ok": True, "skip": "fora do horario comercial"}
+    if not _term_lock.acquire(blocking=False):
+        return {"ok": True, "skip": "ja rodando"}
+    try:
+        convs = _orf._lista("inbox", cap=60)
+        baldes = {"quente": [], "morno": [], "frio": []}
+        novas = 0
+        for c in convs:
+            cid = c.get("conversationId")
+            if not cid:
+                continue
+            ct = c.get("contact") or {}
+            lt = c.get("lastMessageTime") or (c.get("conversation") or {}).get("lastActivityTime") or ""
+            cache = _TERM_CACHE.get(cid)
+            if cache and lt and cache[0] == lt:
+                cls = cache[1]
+            else:
+                cls = _jarbas.classifica_temp(cid, _TEMP_MODEL)
+                _TERM_CACHE[cid] = (lt, cls); novas += 1
+                _t.sleep(0.3)
+            t = cls.get("temperatura")
+            if t not in baldes:
+                t = "frio"
+            baldes[t].append({"conv": cid, "nome": ct.get("name"),
+                              "telefone": ct.get("phone") or c.get("identifier"),
+                              "motivo": cls.get("motivo", "")})
+        res = {"gerado_em": _sp_now().isoformat(timespec="seconds"), "total": len(convs),
+               "novas_classificacoes": novas,
+               "contagem": {k: len(v) for k, v in baldes.items()}, **baldes}
+        _TERM["result"] = res; _TERM["quando"] = res["gerado_em"]
+        try:
+            import firebase_writer as _fw
+            db = _fw._get_db()
+            if db:
+                db.collection(os.environ.get("TERM_COLL", "escuta_termometro")).document("atual").set(res)
+        except Exception as e:
+            print("[termometro] firestore erro:", e)
+        print("[termometro] %s | novas=%d" % (res["contagem"], novas))
+        return res
+    except Exception as e:
+        print("[termometro] erro:", repr(e)); return {"ok": False, "erro": str(e)[:140]}
+    finally:
+        _term_lock.release()
+
+@app.get("/termometro.json")
+def termometro_publico():
+    # publico: so CONTAGEM (sem PII). Lista completa so pelo token.
+    r = _TERM["result"] or {}
+    return {"ok": True, "quando": _TERM["quando"], "contagem": r.get("contagem"),
+            "total": r.get("total"), "novas": r.get("novas_classificacoes")}
+
+@app.get("/p/{token}/termometro.json")
+def termometro_link(token: str):
+    if not PANEL_TOKEN or not hmac.compare_digest(token, PANEL_TOKEN):
+        raise HTTPException(status_code=404, detail="not found")
+    return {"ok": True, "quando": _TERM["quando"], "result": _TERM["result"]}

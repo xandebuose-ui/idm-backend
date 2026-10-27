@@ -42,6 +42,23 @@ def _fone(p):
         d = d[:2] + d[-8:]
     return d
 
+_COMPRADORES = set()
+try:
+    with open("compradores.txt") as _fh:
+        _COMPRADORES = set(x.strip() for x in _fh if x.strip())
+except Exception:
+    pass
+
+def _eh_comprador(fone):
+    if not fone or not _COMPRADORES:
+        return False
+    salt = os.environ.get("FONE_SALT")
+    if not salt:
+        return False
+    import hmac, hashlib
+    h = hmac.new(salt.encode(), fone.encode(), hashlib.sha256).hexdigest()
+    return h in _COMPRADORES
+
 def _lista(status=None, cap=800):
     filtro = {} if status is None else {"status": status}
     out, frm, step = [], 0, 50
@@ -221,7 +238,7 @@ def run_orfaos(max_msg=130):
             buckets["sem_telefone"] += 1
             continue
         tem_opp = f in opp_fones
-        comprou = f in comprou_fones
+        comprou = (f in comprou_fones) or _eh_comprador(f)
         if not tem_opp:
             nm = _norm_nome(ct.get("name"))
             if len(nm) >= 5 and " " in nm and nm in opp_nomes:
@@ -274,6 +291,7 @@ def run_orfaos(max_msg=130):
         "comprou_fones_n": len(comprou_fones),
         "desde": desde,
         "fila_total": total,
+        "compradores_zandu": len(_COMPRADORES),
         "fila_viva": len(fila),
         "fila_com_fone": len(fila) - buckets["sem_telefone"],
         "match_opp": buckets["cliente_operacional"] + buckets["lead_andamento"],

@@ -253,7 +253,14 @@ def classifica_identidade(fone_raw, nome, idx):
 
 def contexto_ce(fone_raw, nome=None):
     f = _fone(fone_raw)
-    out = {"oportunidades": (_OPP_POR_FONE.get(f, []) or [])[:5] if f else [], "tags": "", "annotation": ""}
+    _raw = (_OPP_POR_FONE.get(f, []) or []) if f else []
+    _seen, _uniq = set(), []
+    for _o in _raw:
+        _k = (_o.get("amount"), _o.get("stage"), _o.get("status"))
+        if _k in _seen:
+            continue
+        _seen.add(_k); _uniq.append(_o)
+    out = {"oportunidades": _uniq[:5], "tags": "", "annotation": ""}
     if f:
         try:
             d = mf.api("patients?phone=" + f)

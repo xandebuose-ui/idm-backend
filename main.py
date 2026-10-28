@@ -341,7 +341,9 @@ def _rodar_orfaos(motivo="poll"):
         _last_orf["quando"] = res.get("gerado_em")
         return res
     except Exception as e:
-        print("[orfaos] erro:", e)
+        import traceback as _tb
+        _last_orf["erro"] = repr(e)[:300]; _last_orf["erro_em"] = _sp_now().isoformat(timespec="seconds")
+        print("[orfaos] erro:", e); print(_tb.format_exc(), flush=True)
         return {"ok": False, "erro": str(e)[:160]}
     finally:
         _orf_lock.release()
@@ -355,7 +357,7 @@ def run_orfaos_now(x_idm_secret: str = Header(default="")):
 
 @app.get("/orfaos.json")
 def orfaos_json():
-    return {"ok": True, "quando": _last_orf["quando"], "result": _last_orf["result"]}
+    return {"ok": True, "quando": _last_orf["quando"], "result": _last_orf["result"], "erro": _last_orf.get("erro")}
 
 
 # ---- Jarbas: analise por lead (sob demanda; modelo via JARBAS_MODEL) ----

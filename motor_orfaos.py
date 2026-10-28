@@ -293,10 +293,13 @@ def contexto_ce(fone_raw, nome=None):
 
 def run_orfaos(max_msg=130):
     t0 = time.time()
+    print("[orfaos] START", flush=True)
     opp_fones, comprou_fones, opp_nomes, n_opps, idx_diag = _indice_ce()
+    print('[orfaos] indice ok: opps=%d' % n_opps, flush=True)
     _IDX_CACHE["data"] = (opp_fones, comprou_fones, opp_nomes); _IDX_CACHE["t"] = time.time()
     desde = os.environ.get("ESCUTA_DESDE") or (dt.date.today() - dt.timedelta(days=int(os.environ.get("ESCUTA_DIAS", "90")))).isoformat()
     convs = _lista(None)
+    print('[orfaos] lista: %d convs' % len(convs), flush=True)
     seen, fila, total = set(), [], 0
     for c in convs:
         cid = c.get("conversationId")
@@ -313,6 +316,7 @@ def run_orfaos(max_msg=130):
     origem_tot = {}
     novas_leituras = 0
     cand, itens, universo = [], [], []
+    print('[orfaos] fila=%d, iniciando match' % len(fila), flush=True)
     for c in fila:
         ct = c.get("contact") or {}
         f = _fone(ct.get("phone") or c.get("identifier"))
@@ -336,9 +340,12 @@ def run_orfaos(max_msg=130):
                              "situacao": situacao_lead(f)})
             continue
         cand.append((c, f, comprou))
+    print('[orfaos] match ok, cand(sem_opp)=%d, lendo 1a-msg...' % len(cand), flush=True)
     for c, f, comprou in cand:
         cid = c.get("conversationId")
         ct = c.get("contact") or {}
+        if novas_leituras and novas_leituras % 25 == 0:
+            print('[orfaos] lidas %d 1a-msgs' % novas_leituras, flush=True)
         ja = cid in _MSG_CACHE
         if not ja and novas_leituras >= max_msg:
             buckets["pendente_leitura"] += 1

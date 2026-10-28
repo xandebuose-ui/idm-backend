@@ -407,6 +407,16 @@ def _rodar_termometro(motivo="poll"):
         baldes = {"quente": [], "morno": [], "frio": [], "cross_sell": [],
                   "operacional": [], "revisar": [], "pendente": []}
         feitas = 0
+        tratados = {}
+        try:
+            import firebase_writer as _fw2
+            _dbt = _fw2._get_db()
+            if _dbt:
+                for _d in _dbt.collection("escuta_tratados").stream():
+                    tratados[_d.id] = _d.to_dict()
+        except Exception as _e:
+            print("[termometro] tratados erro:", _e, flush=True)
+        alertas = []
         for c in convs:
             cid = c.get("conversationId")
             if not cid:
@@ -431,15 +441,42 @@ def _rodar_termometro(motivo="poll"):
                 cls = {"temperatura": "pendente", "motivo": "aguardando classificacao"}
             t = cls.get("temperatura")
             if t not in baldes or t == "pendente":
-                t = "revisar" if t not in ("pendente",) else "pendente"
-            baldes[t].append({"conv": cid, "nome": nome, "telefone": fone_raw,
-                              "identidade": ident, "motivo": cls.get("motivo", "")})
+                t = "revisar" if t != "pendente" else "pendente"
+            tr = tratados.get(str(cid))
+            alerta = ""
+            if tr:
+                lt_m = tr.get("lt_marcado") or ""
+                if lt and lt_m and lt > lt_m:
+                    continue  # houve atividade apos marcar -> tratado de fato, sai do painel
+                if (_t.time() - float(tr.get("ts") or 0)) / 60.0 < 20:
+                    continue  # graca: recem-marcado, assume em tratamento
+                alerta = "marcado sem acao"
+                alertas.append({"conv": cid, "nome": nome, "marcado_em": tr.get("marcado_em")})
+            baldes[t].append({"conv": cid, "nome": nome, "telefone": fone_raw, "lt": lt,
+                              "identidade": ident, "motivo": cls.get("motivo", ""), "alerta": alerta})
+        import datetime as _dtm
+        _hoje = _sp_now().date().isoformat()
+        _sem = (_sp_now().date() - _dtm.timedelta(days=7)).isoformat()
+        _eh = _es = 0
+        for c in convs:
+            dcri = (c.get("createdAt") or (c.get("conversation") or {}).get("createdAt") or "")[:10]
+            if dcri:
+                if dcri == _hoje:
+                    _eh += 1
+                if dcri >= _sem:
+                    _es += 1
+        try:
+            _origem = ((_last_orf.get("result") or {}).get("origem")) or {}
+        except Exception:
+            _origem = {}
+        entrada = {"hoje": _eh, "semana": _es, "origem": _origem}
         contagem = {k: len(v) for k, v in baldes.items()}
         funil = contagem["quente"] + contagem["morno"] + contagem["frio"] + contagem["cross_sell"]
         res = {"gerado_em": _sp_now().isoformat(timespec="seconds"), "total": len(convs),
                "classificadas_no_ciclo": feitas, "em_cache": len(_TERM_CACHE),
                "fonte": os.environ.get("TERM_FONTE", "inbox_ce"), "gate": aplicar_gate,
-               "funil": funil, "contagem": contagem, **baldes}
+               "funil": funil, "contagem": contagem, "entrada": entrada,
+               "alertas": alertas, **baldes}
         _TERM["result"] = res; _TERM["quando"] = res["gerado_em"]
         try:
             import firebase_writer as _fw
@@ -486,3 +523,20 @@ def painel_leads(token: str):
     _p = _os.path.join(_os.path.dirname(__file__), "painel_leads.html")
     with open(_p, encoding="utf-8") as _f:
         return HTMLResponse(_f.read())
+
+
+@app.post("/p/{token}/tratar")
+def painel_tratar(token: str, conv_id: str, lt: str = "", desfazer: bool = False):
+    if not PANEL_TOKEN or not hmac.compare_digest(token, PANEL_TOKEN):
+        raise HTTPException(status_code=404, detail="not found")
+    import time as _t2, firebase_writer as _fw3
+    db = _fw3._get_db()
+    if not db:
+        return {"ok": False, "motivo": "sem db"}
+    doc = db.collection("escuta_tratados").document(str(conv_id))
+    if desfazer:
+        doc.delete()
+        return {"ok": True, "desfeito": True}
+    doc.set({"conv": str(conv_id), "marcado_em": _sp_now().isoformat(timespec="seconds"),
+             "ts": int(_t2.time()), "lt_marcado": lt})
+    return {"ok": True}

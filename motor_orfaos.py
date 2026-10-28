@@ -393,7 +393,7 @@ def run_orfaos(max_msg=130):
                              "telefone": ct.get("phone") or c.get("identifier"),
                              "lt": c.get("lastMessageTime") or "",
                              "criado": (c.get("createdAt") or (c.get("conversation") or {}).get("createdAt") or "")[:10],
-                             "identidade": "cliente" if comprou else "novo",
+                             "identidade": classifica_identidade(f, ct.get("name")),
                              "situacao": "sem_opp"})
         origem = _classifica_origem(msg, ct)
         origem_tot[origem] = origem_tot.get(origem, 0) + 1

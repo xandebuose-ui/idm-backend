@@ -634,6 +634,30 @@ function fecha(){E('ov').style.display='none';E('dw').classList.remove('open');}
 carrega();setInterval(carrega,90000);
 </script></body></html>"""
 
+@app.get("/p/{token}/rawmeta")
+def _rawmeta(token: str, conv_id: str):
+    if not PANEL_TOKEN or not hmac.compare_digest(token, PANEL_TOKEN):
+        raise HTTPException(status_code=404, detail="not found")
+    data, err = _orf._cc("/conversation/messages/%s?from=0&to=40&orderBy=createdAt%%3AASC&filters=%%7B%%7D" % conv_id)
+    if err or not data:
+        return {"err": str(err)}
+    items = data.get("conversationItems") or []
+    keys = set()
+    amostra = []
+    tipo_fields = ("type", "messageType", "mediaType", "contentType", "mimeType", "kind", "itemType")
+    media_fields = ("media", "attachments", "file", "audio", "fileUrl", "mediaUrl", "url", "attachment")
+    for m in items:
+        keys |= set(m.keys())
+        row = {"senderType": m.get("senderType"),
+               "has_content": bool((m.get("content") or "").strip()),
+               "has_audioText": bool((m.get("audioTextContent") or "").strip())}
+        for tf in tipo_fields:
+            if m.get(tf) is not None:
+                row[tf] = m.get(tf)
+        row["media_keys_presentes"] = [mf for mf in media_fields if m.get(mf)]
+        amostra.append(row)
+    return {"n": len(items), "keys": sorted(keys), "amostra": amostra[:14]}
+
 @app.get("/p/{token}/leads", response_class=HTMLResponse)
 def painel_leads(token: str):
     if not PANEL_TOKEN or not hmac.compare_digest(token, PANEL_TOKEN):

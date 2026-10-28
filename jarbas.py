@@ -138,3 +138,38 @@ def classifica_temp(conv_id, modelo):
         return _parse_json(txt)
     except Exception as e:
         return {"temperatura": "erro", "motivo": str(e)[:120]}
+
+
+_TEMP_SYS2 = (
+    "Voce e um vendedor experiente do Instituto Mafra (clinica de pos-operatorio e estetica).\n"
+    "Vou te dar a CONVERSA (Cliente = a pessoa; Atendente = a clinica) e uma DICA de identidade da pessoa.\n"
+    "Julgue, lendo a INTENCAO real (nao palavras soltas), em qual balde a conversa cai:\n"
+    "- quente: prospect pronto pra avancar/comprar (pede preco/valor, quer agendar Avaliacao, 'quero', 'como faco', decisao clara).\n"
+    "- morno: prospect com interesse mas sem urgencia nem data; 'vou ver', 'depois'.\n"
+    "- frio: prospect sem engajamento real, parado ou sumiu.\n"
+    "- cross_sell: a pessoa JA E CLIENTE e demonstra querer COMPRAR algo novo que ainda nao tem (servico/procedimento diferente do que ja faz).\n"
+    "- operacional: a pessoa JA E CLIENTE tratando de LOGISTICA/administrativo do que ja tem (agendar/confirmar/remarcar sessao de pacote existente, duvida operacional). ISSO NAO E VENDA.\n"
+    "Regras de decisao:\n"
+    "- A CONVERSA manda sempre. A dica so ajuda.\n"
+    "- Dica 'cliente' + conversa so logistica -> operacional.\n"
+    "- Dica 'cliente' + quer comprar coisa nova -> cross_sell.\n"
+    "- Dica 'novo' ou 'lead' -> quente/morno/frio pela intencao.\n"
+    "- Mesmo sem a dica, se a conversa e so logistica de paciente (confirmar horario de sessao) -> operacional; se e intencao de compra -> quente/morno/frio ou cross_sell.\n"
+    "Responda SOMENTE um JSON: {\"temperatura\":\"quente|morno|frio|cross_sell|operacional\",\"motivo\":\"frase curta\"}."
+)
+
+def classifica_lead(conv_id, modelo, identidade="novo"):
+    linhas, _ld = _transcript(conv_id, max_msgs=25)
+    if not linhas:
+        return {"temperatura": "frio", "motivo": "sem conversa legivel"}
+    user = ("Dica de identidade da pessoa: " + str(identidade) +
+            "\n\nConversa (Cliente = a pessoa):\n" + "\n".join(linhas[-40:]))
+    try:
+        import anthropic
+        cli = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=1, timeout=30)
+        msg = cli.messages.create(model=modelo, max_tokens=400, system=_TEMP_SYS2,
+                                  messages=[{"role": "user", "content": user}])
+        txt = "".join(getattr(b, "text", "") for b in msg.content)
+        return _parse_json(txt)
+    except Exception as e:
+        return {"temperatura": "erro", "motivo": str(e)[:120]}

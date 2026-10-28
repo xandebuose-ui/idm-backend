@@ -69,7 +69,6 @@ def _startup():
         pass
     try:
         threading.Timer(25, lambda: _rodar_termometro("startup")).start()
-        threading.Timer(95, _auditar_quentes).start()
     except Exception:
         pass
     print(f"[startup] poll {POLL_MINUTES}min; vigia cracha 30min; orfaos 15min")
@@ -397,6 +396,15 @@ _term_lock = threading.Lock()
 _TERM_CACHE = {}
 _TEMP_MODEL = os.environ.get("JARBAS_TEMP_MODEL", "claude-haiku-5-5")
 
+def _fonte_de_leads():
+    # Abstrai a FONTE de leads. Hoje: inbox do CliniChat (WhatsApp unico) + gate de identidade.
+    # Futuro (numero dedicado so de leads): TERM_FONTE=dedicado -> inbox ja 100% lead, sem gate.
+    # Trocar e 1 env var; o modulo do gate fica removivel sem tocar termometro/painel/Jarbas.
+    modo = os.environ.get("TERM_FONTE", "inbox_ce")
+    convs = _orf._lista("inbox", cap=int(os.environ.get("TERM_CAP", "80")))
+    aplicar_gate = (modo != "dedicado")
+    return convs, aplicar_gate
+
 def _rodar_termometro(motivo="poll"):
     import time as _t
     if motivo == "poll":
@@ -406,23 +414,29 @@ def _rodar_termometro(motivo="poll"):
     if not _term_lock.acquire(blocking=False):
         return {"ok": True, "skip": "ja rodando"}
     try:
-        print("[termometro] iniciando passada (%s)" % motivo)
-        convs = _orf._lista("inbox", cap=80)
+        print("[termometro] iniciando passada (%s)" % motivo, flush=True)
+        convs, aplicar_gate = _fonte_de_leads()
         orc = int(os.environ.get("TERM_BATCH", "12"))
-        baldes = {"quente": [], "morno": [], "frio": [], "pendente": []}
+        idx = _orf.indice_ce_cached() if aplicar_gate else None
+        baldes = {"quente": [], "morno": [], "frio": [], "cross_sell": [],
+                  "operacional": [], "pendente": []}
         feitas = 0
         for c in convs:
             cid = c.get("conversationId")
             if not cid:
                 continue
             ct = c.get("contact") or {}
+            fone_raw = ct.get("phone") or c.get("identifier")
+            nome = ct.get("name")
+            ident = _orf.classifica_identidade(fone_raw, nome, idx) if aplicar_gate else "novo"
             lt = c.get("lastMessageTime") or (c.get("conversation") or {}).get("lastActivityTime") or ""
+            chave = (lt, ident)
             cache = _TERM_CACHE.get(cid)
-            if cache and (not lt or cache[0] == lt):
+            if cache and lt and cache[0] == chave:
                 cls = cache[1]
             elif feitas < orc:
-                cls = _jarbas.classifica_temp(cid, _TEMP_MODEL)
-                _TERM_CACHE[cid] = (lt, cls); feitas += 1; _t.sleep(0.4)
+                cls = _jarbas.classifica_lead(cid, _TEMP_MODEL, ident)
+                _TERM_CACHE[cid] = (chave, cls); feitas += 1; _t.sleep(0.4)
             elif cache:
                 cls = cache[1]
             else:
@@ -430,12 +444,14 @@ def _rodar_termometro(motivo="poll"):
             t = cls.get("temperatura")
             if t not in baldes:
                 t = "frio"
-            baldes[t].append({"conv": cid, "nome": ct.get("name"),
-                              "telefone": ct.get("phone") or c.get("identifier"),
-                              "motivo": cls.get("motivo", "")})
+            baldes[t].append({"conv": cid, "nome": nome, "telefone": fone_raw,
+                              "identidade": ident, "motivo": cls.get("motivo", "")})
+        contagem = {k: len(v) for k, v in baldes.items()}
+        funil = contagem["quente"] + contagem["morno"] + contagem["frio"] + contagem["cross_sell"]
         res = {"gerado_em": _sp_now().isoformat(timespec="seconds"), "total": len(convs),
                "classificadas_no_ciclo": feitas, "em_cache": len(_TERM_CACHE),
-               "contagem": {k: len(v) for k, v in baldes.items()}, **baldes}
+               "fonte": os.environ.get("TERM_FONTE", "inbox_ce"), "gate": aplicar_gate,
+               "funil": funil, "contagem": contagem, **baldes}
         _TERM["result"] = res; _TERM["quando"] = res["gerado_em"]
         try:
             import firebase_writer as _fw
@@ -443,11 +459,11 @@ def _rodar_termometro(motivo="poll"):
             if db:
                 db.collection(os.environ.get("TERM_COLL", "escuta_termometro")).document("atual").set(res)
         except Exception as e:
-            print("[termometro] firestore erro:", e)
-        print("[termometro] %s | ciclo=%d cache=%d" % (res["contagem"], feitas, len(_TERM_CACHE)))
+            print("[termometro] firestore erro:", e, flush=True)
+        print("[termometro] %s funil=%d ciclo=%d cache=%d" % (contagem, funil, feitas, len(_TERM_CACHE)), flush=True)
         return res
     except Exception as e:
-        print("[termometro] erro:", repr(e)); return {"ok": False, "erro": str(e)[:140]}
+        print("[termometro] erro:", repr(e), flush=True); return {"ok": False, "erro": str(e)[:140]}
     finally:
         _term_lock.release()
 

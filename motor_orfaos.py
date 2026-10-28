@@ -210,9 +210,44 @@ def _indice_ce():
             "opp_nomes_n": len(opp_nomes)}
     return opp_fones, comprou_fones, opp_nomes, len(opps), diag
 
+
+_IDX_CACHE = {"t": 0.0, "data": None}
+
+def indice_ce_cached(ttl=1800):
+    # Reusa o indice ja construido pelo orfaos (compartilhado via _IDX_CACHE); so reconstroi se velho.
+    now = time.time()
+    if _IDX_CACHE["data"] and (now - _IDX_CACHE["t"]) < ttl:
+        return _IDX_CACHE["data"]
+    opp_fones, comprou_fones, opp_nomes, _n, _d = _indice_ce()
+    _IDX_CACHE["data"] = (opp_fones, comprou_fones, opp_nomes)
+    _IDX_CACHE["t"] = now
+    return _IDX_CACHE["data"]
+
+def classifica_identidade(fone_raw, nome, idx):
+    # Sinal de APOIO (nao e o juiz): cliente | lead_cadastrado | novo.
+    if not idx:
+        return "novo"
+    opp_fones, comprou_fones, opp_nomes = idx
+    f = _fone(fone_raw)
+    if not f:
+        return "novo"
+    comprou = (f in comprou_fones) or _eh_comprador(f)
+    tem_opp = f in opp_fones
+    if not tem_opp:
+        nm = _norm_nome(nome)
+        if len(nm) >= 5 and " " in nm and nm in opp_nomes:
+            tem_opp = True
+            comprou = comprou or opp_nomes[nm]
+    if comprou:
+        return "cliente"
+    if tem_opp:
+        return "lead_cadastrado"
+    return "novo"
+
 def run_orfaos(max_msg=130):
     t0 = time.time()
     opp_fones, comprou_fones, opp_nomes, n_opps, idx_diag = _indice_ce()
+    _IDX_CACHE["data"] = (opp_fones, comprou_fones, opp_nomes); _IDX_CACHE["t"] = time.time()
     desde = os.environ.get("ESCUTA_DESDE") or ("%04d-%02d-01" % (dt.date.today().year, dt.date.today().month))
     convs = _lista(None)
     seen, fila, total = set(), [], 0

@@ -80,6 +80,30 @@ def _carregar_termometro_do_firestore():
         print("[termometro] load firestore erro:", e, flush=True)
 
 
+def _carregar_universo_firestore():
+    try:
+        import firebase_writer as _fw
+        db = _fw._get_db()
+        if not db:
+            return
+        d = db.collection(os.environ.get("ESCUTA_ORFAOS_COLL", "escuta_orfaos")).document("universo").get()
+        if not d.exists:
+            return
+        data = d.to_dict() or {}
+        u = data.get("universo") or []
+        if not u:
+            return
+        cur = dict(_last_orf.get("result") or {})
+        if not cur.get("universo"):
+            cur["universo"] = u
+            cur.setdefault("origem", data.get("origem") or {})
+            _last_orf["result"] = cur
+            _last_orf["quando"] = _last_orf.get("quando") or data.get("gerado_em")
+            print("[orfaos] universo carregado do firestore: %d" % len(u), flush=True)
+    except Exception as e:
+        print("[orfaos] load universo erro:", e, flush=True)
+
+
 def _startup():
     sched = BackgroundScheduler(timezone="America/Sao_Paulo")
     sched.add_job(lambda: _rodar("poll"), "interval", minutes=POLL_MINUTES)
@@ -97,6 +121,7 @@ def _startup():
         pass
     try:
         threading.Timer(5, _carregar_termometro_do_firestore).start()
+        threading.Timer(8, _carregar_universo_firestore).start()
         threading.Timer(25, lambda: _rodar_termometro("startup")).start()
     except Exception:
         pass
@@ -599,6 +624,8 @@ def _debug_orfaos():
             _DBG_ORF["ok"] = True
             _DBG_ORF["universo"] = len((r or {}).get("universo") or [])
             _DBG_ORF["buckets"] = (r or {}).get("buckets")
+            _last_orf["result"] = r
+            _last_orf["quando"] = (r or {}).get("gerado_em")
         except Exception as e:
             _DBG_ORF.clear()
             _DBG_ORF["ok"] = False

@@ -411,6 +411,13 @@ def run_orfaos(max_msg=130):
         "universo": universo,
     }
     _prog('fim universo=%d' % len(universo))
+    try:
+        _dbu = fw._get_db()
+        if _dbu:
+            _dbu.collection(os.environ.get("ESCUTA_ORFAOS_COLL", "escuta_orfaos")).document("universo").set(
+                {"universo": universo[:600], "origem": origem_tot, "gerado_em": resumo["gerado_em"]})
+    except Exception as _eu:
+        print("[orfaos] universo firestore erro:", _eu, flush=True)
     _grava(resumo, itens)
     return resumo
 

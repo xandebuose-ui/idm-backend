@@ -130,6 +130,13 @@ def analisar(conv_id, meta=None):
     if meta.get("nome"): ctx.append("Nome: " + str(meta["nome"]))
     if meta.get("temperatura"): ctx.append("Temperatura (do termometro): " + str(meta["temperatura"]))
     if meta.get("origem"): ctx.append("Origem: " + str(meta["origem"]))
+    if meta.get("identidade"): ctx.append("Identidade (sinal de apoio): " + str(meta["identidade"]))
+    _ce = meta.get("ce") or {}
+    if _ce.get("oportunidades"):
+        _ops = "; ".join(("valor %s | %s | %s" % (o.get("amount"), o.get("pipeline") or "-", o.get("stage") or "-")) for o in _ce["oportunidades"][:4])
+        ctx.append("Oportunidades no CRM do CE: " + _ops)
+    if _ce.get("tags"): ctx.append("Tags no CE: " + str(_ce["tags"]))
+    if _ce.get("annotation"): ctx.append("Anotacao no CE: " + str(_ce["annotation"]))
     system = (_cerebro() +
               "\n\n---\nVoce e o Jarbas. Responda com diagnostico, conducao e mensagem. "
               "'diagnostico' = 1-2 frases. 'conducao' = a jogada concreta agora. "
@@ -139,7 +146,10 @@ def analisar(conv_id, meta=None):
               "internamente pra calibrar o tom.\n"
               "- O Instituto faz o CUIDADO (pre e pos-operatorio, estetica); NAO realiza a cirurgia. "
               "A cirurgia e feita pelo CIRURGIAO (medico externo). Se o texto disser 'cirurgia com o Dr. X', "
-              "entenda que o Dr. X e quem OPERA; o pre/pos-op e com o Instituto. Nao confunda os dois.")
+              "entenda que o Dr. X e quem OPERA; o pre/pos-op e com o Instituto. Nao confunda os dois.\n"
+              "- Se a pessoa NAO for cliente com pacote (identidade 'novo' ou 'lead no CE') OU tiver oportunidade "
+              "EM ABERTO no CRM, aponte no diagnostico como OPORTUNIDADE DE VENDA a atacar (orcamento/oportunidade "
+              "aberta sem fechamento). Use os dados do CE acima, nao invente numeros.")
     user = ("Contexto do lead:\n" + ("\n".join(ctx) or "(sem metadados)") +
             "\n\nConversa real (ordem cronologica):\n" + transcript)
     _schema_an = {"type": "object", "properties": {

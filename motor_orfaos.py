@@ -174,7 +174,10 @@ def _fones_do_registro(p):
             fs.add(f)
     return fs
 
+_OPP_POR_FONE = {}
+
 def _indice_ce():
+    _OPP_POR_FONE.clear()
     pat_map = {}
     com_fone = 0
     pats = mf.api_all("patients?per_page=100", cap_pages=80)
@@ -200,6 +203,9 @@ def _indice_ce():
             opp_fones |= fs
             if comprou:
                 comprou_fones |= fs
+            for _f in fs:
+                _OPP_POR_FONE.setdefault(_f, []).append({"amount": o.get("amount"),
+                    "stage": stage, "status": o.get("status"), "pipeline": pipe})
         else:
             semfone += 1
             nm = _norm_nome((o.get("patient") or {}).get("name"))
@@ -243,6 +249,24 @@ def classifica_identidade(fone_raw, nome, idx):
     if tem_opp:
         return "lead_cadastrado"
     return "novo"
+
+
+def contexto_ce(fone_raw, nome=None):
+    f = _fone(fone_raw)
+    out = {"oportunidades": (_OPP_POR_FONE.get(f, []) or [])[:5] if f else [], "tags": "", "annotation": ""}
+    if f:
+        try:
+            d = mf.api("patients?phone=" + f)
+            arr = (d.get("data") or []) if isinstance(d, dict) else []
+            if arr:
+                p0 = arr[0]
+                tg = p0.get("tags") or []
+                out["tags"] = ", ".join((t.get("name", "") if isinstance(t, dict) else str(t)) for t in tg)
+                out["annotation"] = (p0.get("annotation") or "")[:240]
+        except Exception as e:
+            out["erro"] = str(e)[:80]
+    return out
+
 
 def run_orfaos(max_msg=130):
     t0 = time.time()

@@ -509,11 +509,19 @@ def termometro_link(token: str):
 # ======================= PAINEL DE LEADS (termometro) =======================
 @app.get("/p/{token}/analise")
 def painel_analise(token: str, conv_id: str, nome: str = "", temperatura: str = "",
-                   identidade: str = ""):
+                   identidade: str = "", telefone: str = ""):
     if not PANEL_TOKEN or not hmac.compare_digest(token, PANEL_TOKEN):
         raise HTTPException(status_code=404, detail="not found")
-    return _jarbas.analisar(conv_id, {"nome": nome, "temperatura": temperatura,
-                                      "origem": identidade})
+    ce = {}
+    try:
+        ce = _orf.contexto_ce(telefone, nome) if telefone else {}
+    except Exception as e:
+        ce = {"erro": str(e)[:80]}
+    r = _jarbas.analisar(conv_id, {"nome": nome, "temperatura": temperatura,
+                                   "origem": identidade, "identidade": identidade, "ce": ce})
+    if isinstance(r, dict):
+        r["ce"] = ce
+    return r
 
 @app.get("/p/{token}/leads", response_class=HTMLResponse)
 def painel_leads(token: str):

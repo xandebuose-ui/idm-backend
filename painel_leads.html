@@ -96,6 +96,9 @@ footer{margin:28px 0 14px;font-size:.76rem;color:var(--muted);text-align:center}
 .badge-al{display:inline-block;font-size:.64rem;font-weight:700;background:var(--hot-soft);color:var(--hot);padding:1px 6px;border-radius:8px;margin-left:6px}
 .btn-trat{margin-top:10px;background:var(--surface-2);color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:10px 15px;font:inherit;font-weight:700;cursor:pointer}
 .btn-trat:hover{border-color:var(--brand)}
+.cebox{background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:.84rem}
+.cet{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:700;margin-bottom:5px}
+.cerow{margin:2px 0}.cefoot{margin-top:6px;font-size:.72rem;color:var(--muted);font-style:italic}
 </style></head><body>
 <header><div class="wrap head">
   <div class="brand"><h1>Painel de Leads</h1><span class="tag">IDM · Instituto Dayane Mafra</span></div>
@@ -168,11 +171,20 @@ async function openLead(key,i){
     '<div class="jar"><div class="jh"><span class=av>J</span> Análise do Jarbas · super-vendedor</div><div class="jbody"><div class=load>Jarbas lendo a conversa real…</div></div></div>';
   E('dbody').scrollTop=0;
   try{
-    const a=await fetch(base+'/analise?conv_id='+encodeURIComponent(l.conv)+'&nome='+encodeURIComponent(l.nome||'')+'&identidade='+encodeURIComponent(l.identidade||''),{cache:'no-store'}).then(r=>r.json());
+    const a=await fetch(base+'/analise?conv_id='+encodeURIComponent(l.conv)+'&nome='+encodeURIComponent(l.nome||'')+'&identidade='+encodeURIComponent(l.identidade||'')+'&telefone='+encodeURIComponent(l.telefone||''),{cache:'no-store'}).then(r=>r.json());
     const jb=document.querySelector('.jar .jbody');
     if(!a.ok){jb.innerHTML='<div class=load>Sem análise: '+esc(a.motivo||'erro')+'</div>';return;}
     window._msg=a.mensagem||'';
-    jb.innerHTML='<div class=block><div class=t>Diagnóstico</div><p>'+esc(a.diagnostico)+'</p></div>'+
+    const ce=a.ce||{},ops=(ce.oportunidades||[]);
+    let ceHtml='';
+    if(ops.length||ce.tags||ce.annotation){
+      ceHtml='<div class=cebox><div class=cet>Contexto Clinic Expert</div>';
+      if(ops.length)ceHtml+='<div class=cerow>💰 Oportunidade(s): '+ops.map(o=>esc((o.stage||'-')+(o.amount?(' · valor '+o.amount):''))).join(' · ')+'</div>';
+      if(ce.tags)ceHtml+='<div class=cerow>🏷️ '+esc(ce.tags)+'</div>';
+      if(ce.annotation)ceHtml+='<div class=cerow>📝 '+esc(ce.annotation)+'</div>';
+      ceHtml+='<div class=cefoot>Saldo de pacote não vem da API do CE — ver ficha de sessões.</div></div>';
+    }
+    jb.innerHTML=ceHtml+'<div class=block><div class=t>Diagnóstico</div><p>'+esc(a.diagnostico)+'</p></div>'+
       '<div class=block><div class=t>Próxima condução</div><p>'+esc(a.conducao)+'</p></div>'+
       '<div class=block><div class=t>Sugestão de mensagem</div><div class=msg><span class=lab>Pronta pra enviar · método Instituto</span>'+esc(a.mensagem)+'</div><button class=cp onclick="cp()">📋 Copiar mensagem</button></div>'+
       (a.cache?'<div class=load style="text-align:left;padding:4px 0">(análise em cache)</div>':'')+

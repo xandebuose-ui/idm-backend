@@ -52,6 +52,34 @@ def _vigia_cracha():
         print("[cracha] vigia erro:", e)
 
 @app.on_event("startup")
+def _carregar_termometro_do_firestore():
+    try:
+        import firebase_writer as _fw
+        db = _fw._get_db()
+        if not db:
+            return
+        d = db.collection(os.environ.get("TERM_COLL", "escuta_termometro")).document("atual").get()
+        if not d.exists:
+            return
+        res = d.to_dict() or {}
+        if _TERM.get("result"):
+            return  # ja classificou algo neste processo; nao sobrescreve
+        _TERM["result"] = res
+        _TERM["quando"] = res.get("gerado_em")
+        n = 0
+        for _b in ("quente", "morno", "frio", "cross_sell", "operacional"):
+            for _l in (res.get(_b) or []):
+                _cid = _l.get("conv")
+                if _cid is None:
+                    continue
+                _TERM_CACHE[_cid] = ((_l.get("lt") or "", _l.get("identidade") or "novo"),
+                                     {"temperatura": _b, "motivo": _l.get("motivo", "")})
+                n += 1
+        print("[termometro] carregado do firestore: %d leads (resiliencia a restart)" % n, flush=True)
+    except Exception as e:
+        print("[termometro] load firestore erro:", e, flush=True)
+
+
 def _startup():
     sched = BackgroundScheduler(timezone="America/Sao_Paulo")
     sched.add_job(lambda: _rodar("poll"), "interval", minutes=POLL_MINUTES)
@@ -68,6 +96,7 @@ def _startup():
     except Exception:
         pass
     try:
+        threading.Timer(5, _carregar_termometro_do_firestore).start()
         threading.Timer(25, lambda: _rodar_termometro("startup")).start()
     except Exception:
         pass

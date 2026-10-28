@@ -585,3 +585,29 @@ def painel_tratar(token: str, conv_id: str, lt: str = "", desfazer: bool = False
     doc.set({"conv": str(conv_id), "marcado_em": _sp_now().isoformat(timespec="seconds"),
              "ts": int(_t2.time()), "lt_marcado": lt})
     return {"ok": True}
+
+
+_DBG_ORF = {}
+
+@app.get("/debug_orfaos")
+def _debug_orfaos():
+    import threading as _th, traceback as _tb
+    def _run():
+        try:
+            r = _orf.run_orfaos()
+            _DBG_ORF.clear()
+            _DBG_ORF["ok"] = True
+            _DBG_ORF["universo"] = len((r or {}).get("universo") or [])
+            _DBG_ORF["buckets"] = (r or {}).get("buckets")
+        except Exception as e:
+            _DBG_ORF.clear()
+            _DBG_ORF["ok"] = False
+            _DBG_ORF["erro"] = repr(e)[:200]
+            _DBG_ORF["tb"] = _tb.format_exc()[-1800:]
+    _DBG_ORF.clear(); _DBG_ORF["ok"] = None
+    _th.Thread(target=_run, daemon=True).start()
+    return {"started": True}
+
+@app.get("/debug_orfaos_res")
+def _debug_orfaos_res():
+    return {"dbg": _DBG_ORF, "prog": _orf.PROG}

@@ -430,9 +430,11 @@ def _rodar_termometro(motivo="poll"):
         return {"ok": True, "skip": "ja rodando"}
     try:
         print("[termometro] iniciando passada (%s)" % motivo, flush=True)
-        convs, aplicar_gate = _fonte_de_leads()
-        orc = int(os.environ.get("TERM_BATCH", "12"))
-        idx = _orf.indice_ce_cached() if aplicar_gate else None
+        universo = ((_last_orf.get("result") or {}).get("universo")) or []
+        if not universo:
+            print("[termometro] universo do orfaos ainda nao pronto; pulando", flush=True)
+            return {"ok": True, "skip": "universo nao pronto"}
+        orc = int(os.environ.get("TERM_BATCH", "20"))
         baldes = {"quente": [], "morno": [], "frio": [], "cross_sell": [],
                   "operacional": [], "revisar": [], "pendente": []}
         feitas = 0
@@ -446,15 +448,16 @@ def _rodar_termometro(motivo="poll"):
         except Exception as _e:
             print("[termometro] tratados erro:", _e, flush=True)
         alertas = []
-        for c in convs:
-            cid = c.get("conversationId")
+        for L in universo:
+            cid = L.get("conv")
             if not cid:
                 continue
-            ct = c.get("contact") or {}
-            fone_raw = ct.get("phone") or c.get("identifier")
-            nome = ct.get("name")
-            ident = _orf.classifica_identidade(fone_raw, nome, idx) if aplicar_gate else "novo"
-            lt = c.get("lastMessageTime") or (c.get("conversation") or {}).get("lastActivityTime") or ""
+            ident = L.get("identidade") or "novo"
+            sit = L.get("situacao") or "sem_opp"
+            if ident != "cliente" and sit == "perdido":
+                continue  # Perdido/Desqualificado -> Reativacao (depois)
+            vazamento = bool(ident != "cliente" and sit == "sem_opp")
+            nome = L.get("nome"); fone_raw = L.get("telefone"); lt = L.get("lt") or ""
             chave = (lt, ident)
             cache = _TERM_CACHE.get(cid)
             if cache and lt and cache[0] == chave:
@@ -476,19 +479,20 @@ def _rodar_termometro(motivo="poll"):
             if tr:
                 lt_m = tr.get("lt_marcado") or ""
                 if lt and lt_m and lt > lt_m:
-                    continue  # houve atividade apos marcar -> tratado de fato, sai do painel
+                    continue
                 if (_t.time() - float(tr.get("ts") or 0)) / 60.0 < 20:
-                    continue  # graca: recem-marcado, assume em tratamento
+                    continue
                 alerta = "marcado sem acao"
                 alertas.append({"conv": cid, "nome": nome, "marcado_em": tr.get("marcado_em")})
             baldes[t].append({"conv": cid, "nome": nome, "telefone": fone_raw, "lt": lt,
-                              "identidade": ident, "motivo": cls.get("motivo", ""), "alerta": alerta})
+                              "identidade": ident, "motivo": cls.get("motivo", ""),
+                              "alerta": alerta, "vazamento": vazamento})
         import datetime as _dtm
         _hoje = _sp_now().date().isoformat()
         _sem = (_sp_now().date() - _dtm.timedelta(days=7)).isoformat()
         _eh = _es = 0
-        for c in convs:
-            dcri = (c.get("createdAt") or (c.get("conversation") or {}).get("createdAt") or "")[:10]
+        for L in universo:
+            dcri = (L.get("criado") or "")[:10]
             if dcri:
                 if dcri == _hoje:
                     _eh += 1
@@ -501,10 +505,12 @@ def _rodar_termometro(motivo="poll"):
         entrada = {"hoje": _eh, "semana": _es, "origem": _origem}
         contagem = {k: len(v) for k, v in baldes.items()}
         funil = contagem["quente"] + contagem["morno"] + contagem["frio"] + contagem["cross_sell"]
-        res = {"gerado_em": _sp_now().isoformat(timespec="seconds"), "total": len(convs),
+        res = {"gerado_em": _sp_now().isoformat(timespec="seconds"), "total": len(universo),
                "classificadas_no_ciclo": feitas, "em_cache": len(_TERM_CACHE),
-               "fonte": os.environ.get("TERM_FONTE", "inbox_ce"), "gate": aplicar_gate,
+               "fonte": "orfaos_universo", "gate": True,
                "funil": funil, "contagem": contagem, "entrada": entrada,
+               "vazamento_total": sum(1 for _b in ("quente", "morno", "frio", "cross_sell")
+                                      for _l in baldes[_b] if _l.get("vazamento")),
                "alertas": alertas, **baldes}
         _TERM["result"] = res; _TERM["quando"] = res["gerado_em"]
         try:
@@ -514,7 +520,7 @@ def _rodar_termometro(motivo="poll"):
                 db.collection(os.environ.get("TERM_COLL", "escuta_termometro")).document("atual").set(res)
         except Exception as e:
             print("[termometro] firestore erro:", e, flush=True)
-        print("[termometro] %s funil=%d ciclo=%d cache=%d" % (contagem, funil, feitas, len(_TERM_CACHE)), flush=True)
+        print("[termometro] %s funil=%d ciclo=%d cache=%d univ=%d" % (contagem, funil, feitas, len(_TERM_CACHE), len(universo)), flush=True)
         return res
     except Exception as e:
         print("[termometro] erro:", repr(e), flush=True); return {"ok": False, "erro": str(e)[:140]}

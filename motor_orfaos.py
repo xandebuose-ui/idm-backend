@@ -251,6 +251,22 @@ def classifica_identidade(fone_raw, nome, idx):
     return "novo"
 
 
+
+def situacao_lead(fone_raw):
+    # 'sem_opp' = vazamento (sem oportunidade no CRM); 'perdido' = todas Perdido/Desqualificado;
+    # 'ativo' = tem oportunidade viva.
+    f = _fone(fone_raw)
+    opps = _OPP_POR_FONE.get(f, []) if f else []
+    if not opps:
+        return "sem_opp"
+    ativos = 0
+    for o in opps:
+        s = (o.get("stage") or "").lower()
+        if not (s.startswith("perdido") or s.startswith("desqualific")):
+            ativos += 1
+    return "ativo" if ativos else "perdido"
+
+
 def contexto_ce(fone_raw, nome=None):
     f = _fone(fone_raw)
     _raw = (_OPP_POR_FONE.get(f, []) or []) if f else []
@@ -279,7 +295,7 @@ def run_orfaos(max_msg=130):
     t0 = time.time()
     opp_fones, comprou_fones, opp_nomes, n_opps, idx_diag = _indice_ce()
     _IDX_CACHE["data"] = (opp_fones, comprou_fones, opp_nomes); _IDX_CACHE["t"] = time.time()
-    desde = os.environ.get("ESCUTA_DESDE") or ("%04d-%02d-01" % (dt.date.today().year, dt.date.today().month))
+    desde = os.environ.get("ESCUTA_DESDE") or (dt.date.today() - dt.timedelta(days=int(os.environ.get("ESCUTA_DIAS", "90")))).isoformat()
     convs = _lista(None)
     seen, fila, total = set(), [], 0
     for c in convs:
@@ -296,7 +312,7 @@ def run_orfaos(max_msg=130):
                "cliente_operacional": 0, "ruido": 0, "revisar": 0, "sem_telefone": 0, "pendente_leitura": 0}
     origem_tot = {}
     novas_leituras = 0
-    cand, itens = [], []
+    cand, itens, universo = [], [], []
     for c in fila:
         ct = c.get("contact") or {}
         f = _fone(ct.get("phone") or c.get("identifier"))
@@ -312,6 +328,12 @@ def run_orfaos(max_msg=130):
                 comprou = opp_nomes[nm]
         if tem_opp:
             buckets["cliente_operacional" if comprou else "lead_andamento"] += 1
+            universo.append({"conv": c.get("conversationId"), "nome": ct.get("name"),
+                             "telefone": ct.get("phone") or c.get("identifier"),
+                             "lt": c.get("lastMessageTime") or "",
+                             "criado": (c.get("createdAt") or (c.get("conversation") or {}).get("createdAt") or "")[:10],
+                             "identidade": "cliente" if comprou else "lead_cadastrado",
+                             "situacao": situacao_lead(f)})
             continue
         cand.append((c, f, comprou))
     for c, f, comprou in cand:
@@ -337,6 +359,12 @@ def run_orfaos(max_msg=130):
         else:
             bucket = "lead_sem_oport_crosssell" if comprou else "lead_sem_oport_frio"
             buckets[bucket] += 1
+            universo.append({"conv": cid, "nome": ct.get("name"),
+                             "telefone": ct.get("phone") or c.get("identifier"),
+                             "lt": c.get("lastMessageTime") or "",
+                             "criado": (c.get("createdAt") or (c.get("conversation") or {}).get("createdAt") or "")[:10],
+                             "identidade": "cliente" if comprou else "novo",
+                             "situacao": "sem_opp"})
         origem = _classifica_origem(msg, ct)
         origem_tot[origem] = origem_tot.get(origem, 0) + 1
         itens.append({
@@ -367,6 +395,7 @@ def run_orfaos(max_msg=130):
         "origem": origem_tot,
         "buckets": buckets,
         "diag_idx": idx_diag,
+        "universo": universo,
     }
     _grava(resumo, itens)
     return resumo
@@ -379,6 +408,7 @@ def _grava(resumo, itens):
         coll = os.environ.get("ESCUTA_ORFAOS_COLL", "escuta_orfaos")
         payload = dict(resumo)
         payload["itens"] = itens[:200]
+        payload.pop("universo", None)
         db.collection(coll).document("_snapshot").set(payload)
         print("[orfaos] gravado: %s" % resumo["buckets"])
     except Exception as e:

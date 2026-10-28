@@ -324,20 +324,6 @@ def run_orfaos_now(x_idm_secret: str = Header(default="")):
     threading.Thread(target=_rodar_orfaos, args=("manual",), daemon=True).start()
     return {"ok": True, "started": True}
 
-@app.get("/diag_opps")
-def diag_opps():
-    import motor_fila as _mf
-    res = {}
-    for label, path in [("opp_default", "crm/opportunities?page=1"),
-                        ("opp_pp100_p1", "crm/opportunities?per_page=100&page=1"),
-                        ("opp_pp100_p2", "crm/opportunities?per_page=100&page=2")]:
-        d = _mf.api(path) or {}
-        res[label] = {"keys": list(d.keys())[:12], "meta": d.get("meta"),
-                      "n_data": len(d.get("data") or [])}
-    dp = _mf.api("patients?per_page=100&page=1") or {}
-    res["patients_pp100_p1"] = {"meta": dp.get("meta"), "n_data": len(dp.get("data") or [])}
-    return res
-
 @app.get("/orfaos.json")
 def orfaos_json():
     return {"ok": True, "quando": _last_orf["quando"], "result": _last_orf["result"]}
@@ -469,28 +455,6 @@ def _rodar_termometro(motivo="poll"):
     finally:
         _term_lock.release()
 
-def _auditar_quentes():
-    """One-shot: loga nos logs do Render a conversa real dos quentes, pra calibracao. Sem PII em URL."""
-    import time as _t
-    for _ in range(40):
-        if _TERM.get("result"): break
-        _t.sleep(3)
-    res = _TERM.get("result") or {}
-    quentes = (res.get("quente") or [])[:4]
-    print("[AUDITA] ===== %d quentes para auditoria de calibracao =====" % len(quentes), flush=True)
-    for q in quentes:
-        cid = q.get("conv")
-        try:
-            linhas, _ld = _jarbas._transcript(cid, max_msgs=25)
-        except Exception as e:
-            print("[AUDITA] conv %s ERRO transcript: %r" % (cid, e), flush=True); continue
-        print("[AUDITA] ---- conv=%s | Haiku=QUENTE | motivo: %s" % (cid, (q.get("motivo") or "")[:160]), flush=True)
-        if not linhas:
-            print("[AUDITA]   (sem conversa legivel)", flush=True); continue
-        for ln in linhas[-14:]:
-            print("[AUDITA]   " + str(ln)[:240], flush=True)
-    print("[AUDITA] ===== fim =====", flush=True)
-
 @app.get("/termometro.json")
 def termometro_publico():
     # publico: so CONTAGEM (sem PII). Lista completa so pelo token.
@@ -513,152 +477,6 @@ def painel_analise(token: str, conv_id: str, nome: str = "", temperatura: str = 
         raise HTTPException(status_code=404, detail="not found")
     return _jarbas.analisar(conv_id, {"nome": nome, "temperatura": temperatura,
                                       "origem": identidade})
-
-_LEADS_HTML = r"""<!doctype html><html lang=pt-BR><head><meta charset=utf-8>
-<meta name=viewport content="width=device-width, initial-scale=1">
-<title>IDM · Painel de Leads</title>
-<style>
-:root{--ink:#1c1c20;--mut:#6b6b73;--line:#e6e2d9;--gold:#b7892f;--bg:#faf8f4;
---hot:#c23b2a;--hotb:#fbe6e2;--warm:#b07d14;--warmb:#fbf1d8;--cold:#3f6b86;--coldb:#e7eef3;
---cs:#1e7d4f;--csb:#e4f1ea;--op:#7a7a82;--opb:#f0efec}
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,"Helvetica Neue",Arial,sans-serif;color:var(--ink);background:#fff;padding:14px;max-width:1280px;margin:0 auto}
-.head{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid var(--gold);padding-bottom:8px;margin-bottom:10px;flex-wrap:wrap;gap:6px}
-.name{font-family:Georgia,serif;font-size:21px}.sub{font-size:11px;color:var(--gold);letter-spacing:2px;text-transform:uppercase}
-.meta{font-size:11px;color:var(--mut);text-align:right}
-.bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center}
-.btn{font:inherit;font-size:12px;border:1px solid var(--line);background:var(--bg);border-radius:6px;padding:6px 12px;cursor:pointer}
-.btn:hover{border-color:var(--gold)}
-.cols{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
-@media(max-width:860px){.cols{grid-template-columns:repeat(2,1fr)}}
-@media(max-width:520px){.cols{grid-template-columns:1fr}}
-.col{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;min-height:80px}
-.col h2{font-size:12px;text-transform:uppercase;letter-spacing:1px;display:flex;justify-content:space-between;align-items:center;padding:2px 4px 8px}
-.col .n{font-weight:700;font-size:13px}
-.q h2{color:var(--hot)}.m h2{color:var(--warm)}.f h2{color:var(--cold)}.c h2{color:var(--cs)}
-.col.q{border-top:3px solid var(--hot)}.col.m{border-top:3px solid var(--warm)}.col.f{border-top:3px solid var(--cold)}.col.c{border-top:3px solid var(--cs)}
-.card{background:#fff;border:1px solid var(--line);border-radius:7px;padding:8px 9px;margin-bottom:7px;cursor:pointer;transition:.1s}
-.card:hover{border-color:var(--gold);box-shadow:0 1px 6px rgba(0,0,0,.07)}
-.card .nm{font-weight:700;font-size:13px}
-.card .tel{font-size:11px;color:var(--mut);margin:1px 0 4px}
-.card .mo{font-size:11.5px;color:#444;line-height:1.3}
-.idt{display:inline-block;font-size:9px;font-weight:700;text-transform:uppercase;padding:1px 6px;border-radius:9px;margin-top:5px;background:var(--opb);color:var(--op)}
-.idt.cli{background:var(--csb);color:var(--cs)}.idt.lead{background:var(--warmb);color:var(--warm)}
-.extra{margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:10px}
-@media(max-width:520px){.extra{grid-template-columns:1fr}}
-.op{background:var(--opb);border:1px solid var(--line);border-radius:8px;padding:8px}
-.op h2{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--op);margin-bottom:6px}
-.op .row{font-size:12px;padding:4px 2px;border-bottom:1px solid #e4e2dc;display:flex;justify-content:space-between;gap:8px}
-.op .row .mo{color:var(--mut);font-size:10.5px}
-.pend{font-size:11px;color:var(--mut);margin-top:8px}
-.ov{position:fixed;inset:0;background:rgba(20,18,16,.38);display:none;z-index:50}
-.dw{position:fixed;top:0;right:0;height:100%;width:min(460px,94vw);background:#fff;box-shadow:-4px 0 20px rgba(0,0,0,.18);transform:translateX(100%);transition:.18s;z-index:51;display:flex;flex-direction:column}
-.dw.open{transform:none}
-.dw .dh{padding:14px 16px;border-bottom:2px solid var(--gold);display:flex;justify-content:space-between;align-items:center}
-.dw .dh .t{font-family:Georgia,serif;font-size:18px}.dw .x{font-size:22px;cursor:pointer;color:var(--mut);border:0;background:0}
-.dw .bd{padding:14px 16px;overflow:auto;flex:1}
-.blk{margin-bottom:14px}.blk .lb{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gold);font-weight:700;margin-bottom:4px}
-.blk .tx{font-size:13.5px;line-height:1.45;white-space:pre-wrap}
-.msg{background:var(--bg);border:1px solid var(--line);border-left:3px solid var(--gold);border-radius:6px;padding:10px;font-size:13.5px;line-height:1.45;white-space:pre-wrap}
-.cp{margin-top:8px;background:var(--gold);color:#fff;border:0;border-radius:6px;padding:9px 14px;font:inherit;font-weight:700;cursor:pointer}
-.cp:active{opacity:.8}
-.load{color:var(--mut);font-size:13px;padding:20px 0;text-align:center}
-</style></head><body>
-<div class=head>
-  <div><div class=name>Instituto Dayane Mafra</div><div class=sub>Painel de Leads · Termômetro ao vivo</div></div>
-  <div class=meta id=meta>carregando…</div>
-</div>
-<div class=bar>
-  <button class=btn onclick=carrega()>↻ Atualizar</button>
-  <span id=funil class=meta></span>
-</div>
-<div class=cols>
-  <div class="col q"><h2>🔥 Quente <span class=n id=nq>0</span></h2><div id=cq></div></div>
-  <div class="col m"><h2>🟠 Morno <span class=n id=nm>0</span></h2><div id=cm></div></div>
-  <div class="col f"><h2>🧊 Frio <span class=n id=nf>0</span></h2><div id=cf></div></div>
-  <div class="col c"><h2>💰 Cross-sell <span class=n id=nc>0</span></h2><div id=cc></div></div>
-</div>
-<div class=extra>
-  <div class=op><h2>⚙️ Operacional · fora do funil <span id=nop></span></h2><div id=cop></div></div>
-  <div class=op><h2>ℹ️ Status</h2><div id=stat class=mo></div><div class=pend id=pend></div></div>
-</div>
-<div class=ov id=ov onclick=fecha()></div>
-<div class=dw id=dw>
-  <div class=dh><div class=t id=dwnm>Lead</div><button class=x onclick=fecha()>×</button></div>
-  <div class=bd id=dwbd></div>
-</div>
-<script>
-const base=location.pathname.replace(/\/leads\/?$/,'');
-const E=id=>document.getElementById(id);
-function esc(s){return (s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
-function card(l){
-  const idc = l.identidade=='cliente'?'cli':(l.identidade=='lead_cadastrado'?'lead':'');
-  const idl = l.identidade=='cliente'?'cliente':(l.identidade=='lead_cadastrado'?'lead no CE':'novo');
-  return `<div class=card onclick="abre('${esc(l.conv)}','${esc(l.nome)}','${esc(l.identidade)}')">
-    <div class=nm>${esc(l.nome)||'(sem nome)'}</div>
-    <div class=tel>${esc(l.telefone)||''}</div>
-    <div class=mo>${esc(l.motivo)}</div>
-    <span class="idt ${idc}">${idl}</span></div>`;
-}
-function fill(id,arr){E(id).innerHTML=(arr&&arr.length)?arr.map(card).join(''):'<div class=load>—</div>';}
-async function carrega(){
-  try{
-    const r=await fetch(base+'/termometro.json',{cache:'no-store'}).then(r=>r.json());
-    const x=r.result||{};
-    const ct=x.contagem||{};
-    fill('cq',x.quente);fill('cm',x.morno);fill('cf',x.frio);fill('cc',x.cross_sell);
-    E('nq').textContent=ct.quente||0;E('nm').textContent=ct.morno||0;E('nf').textContent=ct.frio||0;E('nc').textContent=ct.cross_sell||0;
-    const op=x.operacional||[];E('nop').textContent=op.length;
-    E('cop').innerHTML=op.length?op.map(l=>`<div class=row><span>${esc(l.nome)||'(sem nome)'}</span><span class=mo>${esc(l.motivo)}</span></div>`).join(''):'<div class=mo>nenhum no momento</div>';
-    E('funil').textContent='Funil de venda: '+(x.funil||0)+' leads';
-    E('meta').innerHTML='Atualizado: '+esc((r.quando||'').replace('T',' ').slice(0,16))+'<br>fonte: '+esc(x.fonte||'inbox');
-    E('stat').textContent='Total na inbox: '+(x.total||0)+' · classificados neste ciclo: +'+(x.classificadas_no_ciclo||0)+' · em cache: '+(x.em_cache||0);
-    E('pend').textContent=(ct.pendente||0)+' ainda aguardando classificação (enchem a cada ciclo).';
-  }catch(e){E('meta').textContent='erro ao carregar';}
-}
-async function abre(conv,nome,ident){
-  E('dwnm').textContent=nome||'Lead';E('ov').style.display='block';E('dw').classList.add('open');
-  E('dwbd').innerHTML='<div class=load>Jarbas analisando a conversa…</div>';
-  try{
-    const a=await fetch(base+'/analise?conv_id='+encodeURIComponent(conv)+'&nome='+encodeURIComponent(nome||'')+'&identidade='+encodeURIComponent(ident||''),{cache:'no-store'}).then(r=>r.json());
-    if(!a.ok){E('dwbd').innerHTML='<div class=load>Sem análise: '+esc(a.motivo||'erro')+'</div>';return;}
-    E('dwbd').innerHTML=`
-      <div class=blk><div class=lb>🔎 Diagnóstico</div><div class=tx>${esc(a.diagnostico)}</div></div>
-      <div class=blk><div class=lb>🧭 Próxima condução</div><div class=tx>${esc(a.conducao)}</div></div>
-      <div class=blk><div class=lb>✍️ Sugestão de mensagem</div><div class=msg id=msgtx>${esc(a.mensagem)}</div>
-      <button class=cp onclick="cp()">📋 Copiar mensagem</button></div>
-      <div class=load style="text-align:left">${a.cache?'(análise em cache)':''}</div>`;
-    window._msg=a.mensagem||'';
-  }catch(e){E('dwbd').innerHTML='<div class=load>Falha ao analisar.</div>';}
-}
-function cp(){navigator.clipboard.writeText(window._msg||'').then(()=>{const b=document.querySelector('.cp');if(b){b.textContent='✓ Copiado';setTimeout(()=>b.textContent='📋 Copiar mensagem',1500);}});}
-function fecha(){E('ov').style.display='none';E('dw').classList.remove('open');}
-carrega();setInterval(carrega,90000);
-</script></body></html>"""
-
-@app.get("/p/{token}/rawmeta")
-def _rawmeta(token: str, conv_id: str):
-    if not PANEL_TOKEN or not hmac.compare_digest(token, PANEL_TOKEN):
-        raise HTTPException(status_code=404, detail="not found")
-    data, err = _orf._cc("/conversation/messages/%s?from=0&to=40&orderBy=createdAt%%3AASC&filters=%%7B%%7D" % conv_id)
-    if err or not data:
-        return {"err": str(err)}
-    items = data.get("conversationItems") or []
-    keys = set()
-    amostra = []
-    tipo_fields = ("type", "messageType", "mediaType", "contentType", "mimeType", "kind", "itemType")
-    media_fields = ("media", "attachments", "file", "audio", "fileUrl", "mediaUrl", "url", "attachment")
-    for m in items:
-        keys |= set(m.keys())
-        row = {"senderType": m.get("senderType"),
-               "has_content": bool((m.get("content") or "").strip()),
-               "has_audioText": bool((m.get("audioTextContent") or "").strip())}
-        for tf in tipo_fields:
-            if m.get(tf) is not None:
-                row[tf] = m.get(tf)
-        row["media_keys_presentes"] = [mf for mf in media_fields if m.get(mf)]
-        amostra.append(row)
-    return {"n": len(items), "keys": sorted(keys), "amostra": amostra[:14]}
 
 @app.get("/p/{token}/leads", response_class=HTMLResponse)
 def painel_leads(token: str):

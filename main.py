@@ -357,7 +357,7 @@ def run_orfaos_now(x_idm_secret: str = Header(default="")):
 
 @app.get("/orfaos.json")
 def orfaos_json():
-    return {"ok": True, "quando": _last_orf["quando"], "result": _last_orf["result"], "erro": _last_orf.get("erro")}
+    return {"ok": True, "quando": _last_orf["quando"], "result": _last_orf["result"], "erro": _last_orf.get("erro"), "progresso": _orf.PROG}
 
 
 # ---- Jarbas: analise por lead (sob demanda; modelo via JARBAS_MODEL) ----

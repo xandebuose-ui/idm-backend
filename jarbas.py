@@ -98,18 +98,25 @@ def _parse_json(txt):
 def _struct_call(model, system, user, schema, toolname, max_tokens, timeout=45):
     import anthropic
     cli = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=1, timeout=timeout)
-    msg = cli.messages.create(
+    base = dict(
         model=model, max_tokens=max_tokens,
         system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-        tools=[{"name": toolname, "description": "Registra o resultado no formato exigido.",
+        tools=[{"name": toolname, "description": "Registra o resultado no formato exigido. Use SEMPRE esta ferramenta.",
                 "input_schema": schema}],
-        tool_choice={"type": "tool", "name": toolname},
         messages=[{"role": "user", "content": user}],
     )
+    try:
+        msg = cli.messages.create(tool_choice={"type": "tool", "name": toolname}, **base)
+    except Exception as e:
+        if "tool_choice" in str(e):
+            msg = cli.messages.create(tool_choice={"type": "auto"}, **base)
+        else:
+            raise
     for b in msg.content:
-        if getattr(b, "type", None) == "tool_use":
+        if getattr(b, "type", None) == "tool_use" and isinstance(getattr(b, "input", None), dict):
             return dict(b.input)
-    raise ValueError("sem tool_use na resposta")
+    txt = "".join(getattr(b, "text", "") for b in msg.content)
+    return _parse_json(txt)
 def analisar(conv_id, meta=None):
     meta = meta or {}
     linhas, last_date = _transcript(conv_id)

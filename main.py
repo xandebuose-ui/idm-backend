@@ -325,6 +325,20 @@ def run_orfaos_now(x_idm_secret: str = Header(default="")):
     threading.Thread(target=_rodar_orfaos, args=("manual",), daemon=True).start()
     return {"ok": True, "started": True}
 
+@app.get("/diag_opps")
+def diag_opps():
+    import motor_fila as _mf
+    res = {}
+    for label, path in [("opp_default", "crm/opportunities?page=1"),
+                        ("opp_pp100_p1", "crm/opportunities?per_page=100&page=1"),
+                        ("opp_pp100_p2", "crm/opportunities?per_page=100&page=2")]:
+        d = _mf.api(path) or {}
+        res[label] = {"keys": list(d.keys())[:12], "meta": d.get("meta"),
+                      "n_data": len(d.get("data") or [])}
+    dp = _mf.api("patients?per_page=100&page=1") or {}
+    res["patients_pp100_p1"] = {"meta": dp.get("meta"), "n_data": len(dp.get("data") or [])}
+    return res
+
 @app.get("/orfaos.json")
 def orfaos_json():
     return {"ok": True, "quando": _last_orf["quando"], "result": _last_orf["result"]}

@@ -179,7 +179,7 @@ async function openLead(key,i){
     let ceHtml='';
     if(ops.length||ce.tags||ce.annotation){
       ceHtml='<div class=cebox><div class=cet>Contexto Clinic Expert</div>';
-      if(ops.length)ceHtml+='<div class=cerow>💰 Oportunidade(s): '+ops.map(o=>esc((o.stage||'-')+(o.amount?(' · valor '+o.amount):''))).join(' · ')+'</div>';
+      if(ops.length)ceHtml+='<div class=cerow>💰 Oportunidade(s): '+ops.map(o=>esc((o.stage||'-')+(o.amount!=null?(' · R$ '+(o.amount/100).toLocaleString('pt-BR',{minimumFractionDigits:2})):''))).join(' · ')+'</div>';
       if(ce.tags)ceHtml+='<div class=cerow>🏷️ '+esc(ce.tags)+'</div>';
       if(ce.annotation)ceHtml+='<div class=cerow>📝 '+esc(ce.annotation)+'</div>';
       ceHtml+='<div class=cefoot>Saldo de pacote não vem da API do CE — ver ficha de sessões.</div></div>';

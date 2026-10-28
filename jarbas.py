@@ -133,7 +133,12 @@ def analisar(conv_id, meta=None):
     if meta.get("identidade"): ctx.append("Identidade (sinal de apoio): " + str(meta["identidade"]))
     _ce = meta.get("ce") or {}
     if _ce.get("oportunidades"):
-        _ops = "; ".join(("valor %s | %s | %s" % (o.get("amount"), o.get("pipeline") or "-", o.get("stage") or "-")) for o in _ce["oportunidades"][:4])
+        def _rs(v):
+            try:
+                return "R$ %.2f" % (float(v) / 100.0)
+            except Exception:
+                return "s/ valor"
+        _ops = "; ".join(("%s | %s | %s" % (_rs(o.get("amount")), o.get("pipeline") or "-", o.get("stage") or "-")) for o in _ce["oportunidades"][:4])
         ctx.append("Oportunidades no CRM do CE: " + _ops)
     if _ce.get("tags"): ctx.append("Tags no CE: " + str(_ce["tags"]))
     if _ce.get("annotation"): ctx.append("Anotacao no CE: " + str(_ce["annotation"]))

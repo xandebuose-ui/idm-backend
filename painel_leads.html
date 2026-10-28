@@ -19,9 +19,10 @@
 :root[data-theme="dark"]{--bg:#0d1512;--surface:#131d19;--surface-2:#182420;--fg:#e9efea;--muted:#9db0a7;--line:#24332d;
 --brand:#3cae96;--brand-soft:#15302a;--accent:#d0a561;--hot:#e4785a;--hot-soft:#2c1712;--warm:#d6a948;--warm-soft:#2a2210;
 --cold:#6aa6d4;--cold-soft:#122230;--cs:#43b184;--cs-soft:#15302a;--op:#9db0a7;--op-soft:#182420;--rev:#d0a561;--rev-soft:#2a2210;color-scheme:dark}
+html{font-size:17px}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--fg);font-family:var(--fbody);line-height:1.5;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
-.wrap{max-width:1120px;margin:0 auto;padding:0 max(16px,env(safe-area-inset-left,0px))}
+.wrap{max-width:1320px;margin:0 auto;padding:0 max(16px,env(safe-area-inset-left,0px))}
 h1,h2,h3{font-family:var(--fdisp);font-weight:600;margin:0}
 header{position:sticky;top:0;z-index:10;background:var(--surface);border-bottom:1px solid var(--line)}
 .head{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:14px 0}
@@ -64,7 +65,7 @@ footer{margin:28px 0 14px;font-size:.76rem;color:var(--muted);text-align:center}
 .dhead{display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
 .dhead h2{font-size:1.1rem}
 .iconbtn{margin-left:auto;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;width:34px;height:34px;cursor:pointer;color:var(--fg);font-size:1rem}
-.dbody{overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:12px}
+.dbody{flex:1;min-height:0;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:12px}
 .llist{display:flex;flex-direction:column;gap:10px}
 .litem{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;cursor:pointer;background:var(--surface);text-align:left;font:inherit;color:inherit;width:100%}
 .litem:hover{background:var(--surface-2)}.litem .nm{font-weight:600}.litem .mt{font-size:.8rem;color:var(--muted)}.litem .go{margin-left:auto;color:var(--brand);font-weight:700}
@@ -136,11 +137,12 @@ function openGroup(key){
   const arr=DATA[key]||[];
   E('dhead').innerHTML='<h2>'+esc(LABEL[key])+' — '+arr.length+'</h2><button class="iconbtn" aria-label="Fechar" onclick="closeDrawer()">✕</button>';
   if(!arr.length){E('dbody').innerHTML='<div class=load>Nenhum lead neste grupo agora.</div>';openDrawer();return;}
-  let h='<div class=llist>';
+  const TTL={cli:'cliente = já comprou (histórico de compra)',lead:'lead no CE = tem cadastro, nunca comprou','':'novo = sem cadastro no Clinic Expert'};
+  let h='<div style="font-size:.78rem;color:var(--muted);margin-bottom:8px">Identidade: <b>novo</b> sem cadastro · <b>lead no CE</b> cadastrado sem compra · <b>cliente</b> já comprou</div><div class=llist>';
   arr.forEach((l,i)=>{
     const idc=l.identidade=='cliente'?'cli':(l.identidade=='lead_cadastrado'?'lead':'');
     const idl=l.identidade=='cliente'?'cliente':(l.identidade=='lead_cadastrado'?'lead no CE':'novo');
-    h+='<button class=litem onclick="openLead(\''+key+'\','+i+')"><div><div class=nm>'+(esc(l.nome)||'(sem nome)')+'</div><div class=mt>'+esc(l.telefone||'')+'</div><span class="idt '+idc+'">'+idl+'</span></div><span class=go>›</span></button>';
+    h+='<button class=litem onclick="openLead(\''+key+'\','+i+')"><div><div class=nm>'+(esc(l.nome)||'(sem nome)')+'</div><div class=mt>'+esc(l.telefone||'')+'</div><span class="idt '+idc+'" title="'+TTL[idc]+'">'+idl+'</span></div><span class=go>›</span></button>';
   });
   h+='</div>';E('dbody').innerHTML=h;E('dbody').scrollTop=0;openDrawer();
 }

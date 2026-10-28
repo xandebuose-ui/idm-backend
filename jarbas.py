@@ -131,10 +131,15 @@ def analisar(conv_id, meta=None):
     if meta.get("temperatura"): ctx.append("Temperatura (do termometro): " + str(meta["temperatura"]))
     if meta.get("origem"): ctx.append("Origem: " + str(meta["origem"]))
     system = (_cerebro() +
-              "\n\n---\nVoce e o Jarbas. Responda SOMENTE um JSON valido, sem texto fora dele, "
-              'com exatamente estas chaves: {"diagnostico":"...","conducao":"...","mensagem":"..."}. '
+              "\n\n---\nVoce e o Jarbas. Responda com diagnostico, conducao e mensagem. "
               "'diagnostico' = 1-2 frases. 'conducao' = a jogada concreta agora. "
-              "'mensagem' = mensagem pronta pra enviar no WhatsApp, no tom do Instituto.")
+              "'mensagem' = mensagem pronta pra enviar no WhatsApp, no tom do Instituto.\n"
+              "REGRAS DE SAIDA (importante):\n"
+              "- NUNCA cite o nome da persona (Mariana/Renata/Patricia) na resposta; use o perfil so "
+              "internamente pra calibrar o tom.\n"
+              "- O Instituto faz o CUIDADO (pre e pos-operatorio, estetica); NAO realiza a cirurgia. "
+              "A cirurgia e feita pelo CIRURGIAO (medico externo). Se o texto disser 'cirurgia com o Dr. X', "
+              "entenda que o Dr. X e quem OPERA; o pre/pos-op e com o Instituto. Nao confunda os dois.")
     user = ("Contexto do lead:\n" + ("\n".join(ctx) or "(sem metadados)") +
             "\n\nConversa real (ordem cronologica):\n" + transcript)
     _schema_an = {"type": "object", "properties": {

@@ -175,9 +175,13 @@ def _fones_do_registro(p):
     return fs
 
 _OPP_POR_FONE = {}
+_FONE2UUID = {}     # telefone normalizado -> set de uuids de paciente
+_UUID_OPPS = {}     # uuid -> lista de oportunidades
+_UUID_COMPROU = set()  # uuids que ja compraram (Ganho/CLIENTES)
+_OPP_NOMES = {}     # nome normalizado -> comprou (fallback quando nao achar por telefone)
 
 def _indice_ce():
-    _OPP_POR_FONE.clear()
+    _OPP_POR_FONE.clear(); _FONE2UUID.clear(); _UUID_OPPS.clear(); _UUID_COMPROU.clear(); _OPP_NOMES.clear()
     pat_map = {}
     com_fone = 0
     pats = mf.api_all("patients?per_page=100", cap_pages=80)
@@ -189,32 +193,49 @@ def _indice_ce():
         pat_map[u] = fs
         if fs:
             com_fone += 1
-    opp_fones, comprou_fones, opp_nomes = set(), set(), {}
+        for _f in fs:
+            _FONE2UUID.setdefault(_f, set()).add(u)   # telefone -> uuid(s) (direcao certa)
+    opp_fones, comprou_fones = set(), set()
     opps = mf.api_all("crm/opportunities?sort_column=created_at&sort_direction=desc")
     match, semfone = 0, 0
     for o in opps:
         u = (o.get("patient") or {}).get("uuid")
-        fs = pat_map.get(u) or set()
         pipe = (o.get("pipeline") or {}).get("name") or ""
         stage = (o.get("stage") or {}).get("name") or ""
         comprou = pipe.upper().startswith("CLIENTES") or stage.startswith("Ganho")
+        od = {"amount": o.get("amount"), "stage": stage, "status": o.get("status"), "pipeline": pipe}
+        if u:
+            _UUID_OPPS.setdefault(u, []).append(od)   # uuid -> oportunidades (sempre tem uuid)
+            if comprou:
+                _UUID_COMPROU.add(u)
+        fs = pat_map.get(u) or set()
         if fs:
             match += 1
             opp_fones |= fs
             if comprou:
                 comprou_fones |= fs
             for _f in fs:
-                _OPP_POR_FONE.setdefault(_f, []).append({"amount": o.get("amount"),
-                    "stage": stage, "status": o.get("status"), "pipeline": pipe})
+                _OPP_POR_FONE.setdefault(_f, []).append(od)
         else:
             semfone += 1
             nm = _norm_nome((o.get("patient") or {}).get("name"))
             if len(nm) >= 5 and " " in nm:
-                opp_nomes[nm] = opp_nomes.get(nm, False) or comprou
+                _OPP_NOMES[nm] = _OPP_NOMES.get(nm, False) or comprou
     diag = {"n_patients_lote": len(pats), "patients_com_fone": com_fone,
             "opps": len(opps), "opp_com_fone": match, "opp_sem_fone": semfone,
-            "opp_nomes_n": len(opp_nomes)}
-    return opp_fones, comprou_fones, opp_nomes, len(opps), diag
+            "opp_nomes_n": len(_OPP_NOMES), "fone2uuid_n": len(_FONE2UUID), "uuid_com_opp": len(_UUID_OPPS)}
+    return opp_fones, comprou_fones, _OPP_NOMES, len(opps), diag
+
+
+def _opps_do_fone(fone_raw):
+    # telefone -> uuid(s) do paciente -> oportunidades (direcao confiavel). Fallback no caminho antigo.
+    f = _fone(fone_raw)
+    out = []
+    for u in _FONE2UUID.get(f, ()):  # inclui cadastros duplicados com o mesmo telefone
+        out += _UUID_OPPS.get(u, [])
+    if not out:
+        out = _OPP_POR_FONE.get(f, [])
+    return out, f
 
 
 _IDX_CACHE = {"t": 0.0, "data": None}
@@ -229,34 +250,30 @@ def indice_ce_cached(ttl=1800):
     _IDX_CACHE["t"] = now
     return _IDX_CACHE["data"]
 
-def classifica_identidade(fone_raw, nome, idx):
-    # Sinal de APOIO (nao e o juiz): cliente | lead_cadastrado | novo.
-    if not idx:
-        return "novo"
-    opp_fones, comprou_fones, opp_nomes = idx
+def classifica_identidade(fone_raw, nome=None, idx=None):
+    # Sinal de APOIO: cliente | lead_cadastrado | novo. Cruza por telefone -> uuid -> oportunidade.
     f = _fone(fone_raw)
     if not f:
         return "novo"
-    comprou = (f in comprou_fones) or _eh_comprador(f)
-    tem_opp = f in opp_fones
-    if not tem_opp:
+    uuids = _FONE2UUID.get(f, set())
+    comprou = any(u in _UUID_COMPROU for u in uuids) or _eh_comprador(f)
+    tem_opp = any(u in _UUID_OPPS for u in uuids)
+    if not tem_opp and not uuids:
         nm = _norm_nome(nome)
-        if len(nm) >= 5 and " " in nm and nm in opp_nomes:
+        if len(nm) >= 5 and " " in nm and nm in _OPP_NOMES:
             tem_opp = True
-            comprou = comprou or opp_nomes[nm]
+            comprou = comprou or _OPP_NOMES[nm]
     if comprou:
         return "cliente"
-    if tem_opp:
+    if tem_opp or uuids:   # tem cadastro no CE = lead cadastrado
         return "lead_cadastrado"
     return "novo"
 
 
 
 def situacao_lead(fone_raw):
-    # 'sem_opp' = vazamento (sem oportunidade no CRM); 'perdido' = todas Perdido/Desqualificado;
-    # 'ativo' = tem oportunidade viva.
-    f = _fone(fone_raw)
-    opps = _OPP_POR_FONE.get(f, []) if f else []
+    # 'sem_opp' = sem oportunidade no CRM; 'perdido' = todas Perdido/Desqualificado; 'ativo' = tem opp viva.
+    opps, _f = _opps_do_fone(fone_raw)
     if not opps:
         return "sem_opp"
     ativos = 0
@@ -268,8 +285,7 @@ def situacao_lead(fone_raw):
 
 
 def contexto_ce(fone_raw, nome=None):
-    f = _fone(fone_raw)
-    _raw = (_OPP_POR_FONE.get(f, []) or []) if f else []
+    _raw, f = _opps_do_fone(fone_raw)
     _seen, _uniq = set(), []
     for _o in _raw:
         _k = (_o.get("amount"), _o.get("stage"), _o.get("status"))
@@ -329,13 +345,14 @@ def run_orfaos(max_msg=130):
         if not f:
             buckets["sem_telefone"] += 1
             continue
-        tem_opp = f in opp_fones
-        comprou = (f in comprou_fones) or _eh_comprador(f)
-        if not tem_opp:
+        _uuids = _FONE2UUID.get(f, set())
+        tem_opp = any(_u in _UUID_OPPS for _u in _uuids)
+        comprou = any(_u in _UUID_COMPROU for _u in _uuids) or _eh_comprador(f)
+        if not tem_opp and not _uuids:
             nm = _norm_nome(ct.get("name"))
-            if len(nm) >= 5 and " " in nm and nm in opp_nomes:
+            if len(nm) >= 5 and " " in nm and nm in _OPP_NOMES:
                 tem_opp = True
-                comprou = opp_nomes[nm]
+                comprou = comprou or _OPP_NOMES[nm]
         if tem_opp:
             buckets["cliente_operacional" if comprou else "lead_andamento"] += 1
             universo.append({"conv": c.get("conversationId"), "nome": ct.get("name"),

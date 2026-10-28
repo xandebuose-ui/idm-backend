@@ -419,7 +419,7 @@ def _rodar_termometro(motivo="poll"):
         orc = int(os.environ.get("TERM_BATCH", "12"))
         idx = _orf.indice_ce_cached() if aplicar_gate else None
         baldes = {"quente": [], "morno": [], "frio": [], "cross_sell": [],
-                  "operacional": [], "pendente": []}
+                  "operacional": [], "revisar": [], "pendente": []}
         feitas = 0
         for c in convs:
             cid = c.get("conversationId")
@@ -436,14 +436,16 @@ def _rodar_termometro(motivo="poll"):
                 cls = cache[1]
             elif feitas < orc:
                 cls = _jarbas.classifica_lead(cid, _TEMP_MODEL, ident)
-                _TERM_CACHE[cid] = (chave, cls); feitas += 1; _t.sleep(0.4)
+                feitas += 1; _t.sleep(0.4)
+                if cls.get("temperatura") in ("quente", "morno", "frio", "cross_sell", "operacional"):
+                    _TERM_CACHE[cid] = (chave, cls)
             elif cache:
                 cls = cache[1]
             else:
                 cls = {"temperatura": "pendente", "motivo": "aguardando classificacao"}
             t = cls.get("temperatura")
-            if t not in baldes:
-                t = "frio"
+            if t not in baldes or t == "pendente":
+                t = "revisar" if t not in ("pendente",) else "pendente"
             baldes[t].append({"conv": cid, "nome": nome, "telefone": fone_raw,
                               "identidade": ident, "motivo": cls.get("motivo", "")})
         contagem = {k: len(v) for k, v in baldes.items()}
@@ -662,4 +664,7 @@ def _rawmeta(token: str, conv_id: str):
 def painel_leads(token: str):
     if not PANEL_TOKEN or not hmac.compare_digest(token, PANEL_TOKEN):
         raise HTTPException(status_code=404, detail="not found")
-    return HTMLResponse(_LEADS_HTML)
+    import os as _os
+    _p = _os.path.join(_os.path.dirname(__file__), "painel_leads.html")
+    with open(_p, encoding="utf-8") as _f:
+        return HTMLResponse(_f.read())

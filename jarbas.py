@@ -33,9 +33,23 @@ def _transcript(conv_id, max_msgs=40):
     items = data.get("conversationItems") or []
     items.sort(key=lambda m: m.get("date") or "")
     linhas, last_date = [], ""
+    _marca = {"audio": "[audio]", "ptt": "[audio]", "voice": "[audio]",
+              "image": "[imagem]", "photo": "[imagem]", "video": "[video]",
+              "document": "[arquivo]", "file": "[arquivo]", "sticker": "[figurinha]",
+              "location": "[localizacao]", "contact": "[contato]"}
     for m in items:
-        t = (m.get("content") or m.get("audioTextContent") or "").strip()
-        if not t:
+        content = (m.get("content") or "").strip()
+        atc = (m.get("audioTextContent") or "").strip()
+        typ = (m.get("type") or "").lower()
+        if content:
+            t = content
+        elif atc:
+            t = "[audio transcrito] " + atc
+        elif typ in _marca:
+            t = _marca[typ]
+        elif typ and typ not in ("text", "chat"):
+            t = "[%s]" % typ
+        else:
             continue
         who = "Cliente" if m.get("senderType") == "contacts" else "Atendente"
         linhas.append("%s: %s" % (who, t))
@@ -80,6 +94,22 @@ def _parse_json(txt):
         s = s[i:j + 1]
     return json.loads(s)
 
+
+def _struct_call(model, system, user, schema, toolname, max_tokens, timeout=45):
+    import anthropic
+    cli = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=1, timeout=timeout)
+    msg = cli.messages.create(
+        model=model, max_tokens=max_tokens,
+        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+        tools=[{"name": toolname, "description": "Registra o resultado no formato exigido.",
+                "input_schema": schema}],
+        tool_choice={"type": "tool", "name": toolname},
+        messages=[{"role": "user", "content": user}],
+    )
+    for b in msg.content:
+        if getattr(b, "type", None) == "tool_use":
+            return dict(b.input)
+    raise ValueError("sem tool_use na resposta")
 def analisar(conv_id, meta=None):
     meta = meta or {}
     linhas, last_date = _transcript(conv_id)
@@ -100,13 +130,17 @@ def analisar(conv_id, meta=None):
               "'mensagem' = mensagem pronta pra enviar no WhatsApp, no tom do Instituto.")
     user = ("Contexto do lead:\n" + ("\n".join(ctx) or "(sem metadados)") +
             "\n\nConversa real (ordem cronologica):\n" + transcript)
+    _schema_an = {"type": "object", "properties": {
+        "diagnostico": {"type": "string"},
+        "conducao": {"type": "string"},
+        "mensagem": {"type": "string"}},
+        "required": ["diagnostico", "conducao", "mensagem"]}
     try:
-        txt = _chamar_modelo(system, user)
-        parsed = _parse_json(txt)
+        parsed = _struct_call(_MODEL, system, user, _schema_an, "analise", 1400)
     except KeyError:
         return {"ok": False, "motivo": "ANTHROPIC_API_KEY ausente no Render", "conv_id": conv_id}
     except Exception as e:
-        return {"ok": False, "motivo": "falha modelo/parse: " + str(e)[:140], "conv_id": conv_id}
+        return {"ok": False, "motivo": "falha modelo: " + str(e)[:140], "conv_id": conv_id}
     analise = {k: str(parsed.get(k, "")).strip() for k in ("diagnostico", "conducao", "mensagem")}
     _cache_set(conv_id, {"analise": analise, "last_date": last_date,
                          "gerado_em": int(time.time()), "modelo": _MODEL})
@@ -164,12 +198,12 @@ def classifica_lead(conv_id, modelo, identidade="novo"):
         return {"temperatura": "frio", "motivo": "sem conversa legivel"}
     user = ("Dica de identidade da pessoa: " + str(identidade) +
             "\n\nConversa (Cliente = a pessoa):\n" + "\n".join(linhas[-40:]))
+    _schema_cl = {"type": "object", "properties": {
+        "temperatura": {"type": "string",
+                        "enum": ["quente", "morno", "frio", "cross_sell", "operacional"]},
+        "motivo": {"type": "string", "description": "frase curta, ate 14 palavras"}},
+        "required": ["temperatura", "motivo"]}
     try:
-        import anthropic
-        cli = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=1, timeout=30)
-        msg = cli.messages.create(model=modelo, max_tokens=400, system=_TEMP_SYS2,
-                                  messages=[{"role": "user", "content": user}])
-        txt = "".join(getattr(b, "text", "") for b in msg.content)
-        return _parse_json(txt)
+        return _struct_call(modelo, _TEMP_SYS2, user, _schema_cl, "classificar", 300)
     except Exception as e:
-        return {"temperatura": "erro", "motivo": str(e)[:120]}
+        return {"temperatura": "revisar", "motivo": ("falha: " + str(e)[:80])}

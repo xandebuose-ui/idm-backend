@@ -554,8 +554,27 @@ def _rodar_termometro(motivo="poll"):
     finally:
         _term_lock.release()
 
+_LAST_TICK = {"term": 0.0, "orf": 0.0}
+
+def _maybe_tick():
+    # Ciclo dirigido por trafego (o painel chama a cada ~90s): nao depende do scheduler.
+    import time as _tt, threading as _th
+    now = _tt.time()
+    try:
+        if now - _LAST_TICK["term"] > 55:
+            _LAST_TICK["term"] = now
+            if (_last_orf.get("result") or {}).get("universo"):
+                _th.Thread(target=lambda: _rodar_termometro("tick"), daemon=True).start()
+        if now - _LAST_TICK["orf"] > 1800:
+            _LAST_TICK["orf"] = now
+            _th.Thread(target=lambda: _rodar_orfaos("tick"), daemon=True).start()
+    except Exception as _e:
+        print("[tick] erro:", _e, flush=True)
+
+
 @app.get("/termometro.json")
 def termometro_publico():
+    _maybe_tick()
     # publico: so CONTAGEM (sem PII). Lista completa so pelo token.
     r = _TERM["result"] or {}
     return {"ok": True, "quando": _TERM["quando"], "contagem": r.get("contagem"),
@@ -565,6 +584,7 @@ def termometro_publico():
 def termometro_link(token: str):
     if not PANEL_TOKEN or not hmac.compare_digest(token, PANEL_TOKEN):
         raise HTTPException(status_code=404, detail="not found")
+    _maybe_tick()
     return {"ok": True, "quando": _TERM["quando"], "result": _TERM["result"]}
 
 

@@ -258,6 +258,12 @@ import meta_ads as _meta
 def meta_status():
     return _meta.status()
 
+import tintim_api as _tt
+
+@app.get("/tintim_status")
+def tintim_status():
+    return _tt.status()
+
 @app.get("/webhook/tintim/status")
 def webhook_tintim_status():
     return {"configurado": bool(TINTIM_WEBHOOK_KEY), **_TT_STATS}

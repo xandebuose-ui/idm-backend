@@ -157,52 +157,45 @@ async def webhook(request: Request, x_idm_secret: str = Header(default="")):
     return {"ok": True, "acionado": False, "evento": evento}
 
 
-_WH_LAST = {}  # ultimo webhook CRM recebido (memoria) - debug de payload
+_WH_LAST = {}  # ultimo webhook CRM recebido (memoria) - debug
 
 @app.post("/webhook/ce-crm")
 async def webhook_ce_crm(request: Request):
-    # Recebe eventos de CRM do Clinic Expert (crm_opportunity.created, sale.created...).
-    # Registra o payload CRU (p/ confirmar a estrutura/telefone) e alimenta o mapa telefone->oportunidade.
-    # SO enriquece (nunca destrutivo); nao exige segredo nesta fase de confirmacao.
-    import json as _j
+    # Evento de CRM do Clinic Expert (crm_opportunity.created).
+    # O payload NAO traz telefone (so uuid da oportunidade + paciente{uuid,name} + etapa/status);
+    # confirmado em 29/10/2026 com lead real. Por isso NAO extraimos telefone aqui: a acao correta
+    # e disparar um REFRESH do cruzamento (debounce 60s), que re-busca a API interna ja com o lead
+    # novo + telefone e re-classifica. Nunca destrutivo; nao exige segredo; nao altera a logica
+    # travada (apenas chama a mesma pipeline _rodar_orfaos que o poll ja usa).
+    import json as _j, time as _t
     try:
         body = await request.json()
     except Exception:
         body = {}
-    evt = (body.get("event") or body.get("type") or "").lower()
+    evt = (body.get("type") or body.get("event") or "").lower()
+    res = body.get("resource") or body.get("data") or body
+    if not isinstance(res, dict):
+        res = {}
+    pz = res.get("pipeline")
+    pipe = (pz.get("name") if isinstance(pz, dict) else pz) or res.get("pipeline_name") or ""
+    sz = res.get("stage")
+    stage = (sz.get("name") if isinstance(sz, dict) else sz) or ""
+    status = (sz.get("status") if isinstance(sz, dict) else None) or res.get("status") or ""
     try:
-        print("[wh-crm] evt=%s payload=%s" % (evt, _j.dumps(body, ensure_ascii=False)[:700]), flush=True)
+        print("[wh-crm] evt=%s pipe=%s stage=%s status=%s" % (evt, pipe, stage, status), flush=True)
     except Exception:
-        print("[wh-crm] evt=%s (payload nao serializavel)" % evt, flush=True)
-    data = body.get("data") or body.get("payload") or body
-    cand = (data.get("opportunity") or data.get("crm_opportunity") or data) if isinstance(data, dict) else {}
-    if not isinstance(cand, dict):
-        cand = {}
-    cust = cand.get("customer") or cand.get("patient") or cand.get("contact") or {}
-    phone = cust.get("phone") if isinstance(cust, dict) else None
-    if isinstance(phone, dict):
-        phone = phone.get("number") or phone.get("phone")
-    st = cand.get("stage")
-    stage = (st.get("name") if isinstance(st, dict) else st) or ""
-    pipe = cand.get("pipeline_name") or (cand.get("pipeline") or {}).get("name") or ""
-    atualizou = False
-    try:
-        import motor_orfaos as _o
-        f = _o._fone(phone) if phone else ""
-        if f:
-            od = {"amount": cand.get("amount"), "stage": stage, "status": cand.get("status"), "pipeline": pipe}
-            _o._OPP_POR_FONE.setdefault(f, []).append(od)
-            if pipe.upper().startswith("CLIENTES") or stage.lower().startswith("ganho"):
-                _o._COMPROU_FONE.add(f)
-            _fw.save_crm_map({"fones": _o._OPP_POR_FONE, "comprou": list(_o._COMPROU_FONE)})
-            atualizou = True
-    except Exception as e:
-        print("[wh-crm] erro ao alimentar mapa:", e, flush=True)
+        pass
     global _WH_LAST
-    _WH_LAST = {"recebido_em": dt.datetime.utcnow().isoformat()+"Z", "evt": evt,
-                "phone_extraido": phone, "stage": stage, "pipeline": pipe,
-                "mapa_atualizado": atualizou, "payload": body}
-    return {"ok": True, "evt": evt, "phone_no_payload": bool(phone), "mapa_atualizado": atualizou}
+    _WH_LAST = {"recebido_em": dt.datetime.utcnow().isoformat() + "Z", "evt": evt,
+                "pipe": pipe, "stage": stage, "status": status, "payload": body}
+    acionou = False
+    if evt.startswith("crm_opportunity") or evt.startswith("sale."):
+        now = _t.time()
+        if now - _LAST_TICK.get("wh", 0.0) > 60:
+            _LAST_TICK["wh"] = now
+            threading.Thread(target=_rodar_orfaos, args=("webhook-crm",), daemon=True).start()
+            acionou = True
+    return {"ok": True, "evt": evt, "pipe": pipe, "stage": stage, "acionou_refresh": acionou}
 
 @app.get("/webhook/ce-crm/last/{token}")
 def webhook_ce_crm_last(token: str):

@@ -157,6 +157,8 @@ async def webhook(request: Request, x_idm_secret: str = Header(default="")):
     return {"ok": True, "acionado": False, "evento": evento}
 
 
+_WH_LAST = {}  # ultimo webhook CRM recebido (memoria) - debug de payload
+
 @app.post("/webhook/ce-crm")
 async def webhook_ce_crm(request: Request):
     # Recebe eventos de CRM do Clinic Expert (crm_opportunity.created, sale.created...).
@@ -196,7 +198,18 @@ async def webhook_ce_crm(request: Request):
             atualizou = True
     except Exception as e:
         print("[wh-crm] erro ao alimentar mapa:", e, flush=True)
+    global _WH_LAST
+    _WH_LAST = {"recebido_em": dt.datetime.utcnow().isoformat()+"Z", "evt": evt,
+                "phone_extraido": phone, "stage": stage, "pipeline": pipe,
+                "mapa_atualizado": atualizou, "payload": body}
     return {"ok": True, "evt": evt, "phone_no_payload": bool(phone), "mapa_atualizado": atualizou}
+
+@app.get("/webhook/ce-crm/last/{token}")
+def webhook_ce_crm_last(token: str):
+    if not PANEL_TOKEN or not hmac.compare_digest(token, PANEL_TOKEN):
+        raise HTTPException(status_code=404, detail="not found")
+    return _WH_LAST or {"vazio": True}
+
 
 @app.get("/fila.json")
 def fila_json(_: bool = Depends(_auth)):

@@ -51,7 +51,9 @@ def _iso(d=None):
     return d.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + "%03dZ" % (d.microsecond // 1000)
 
 DATAS_MSG = {"min": None, "max": None, "n": 0}   # intervalo real das datas de mensagem lidas
-CAMPOS_CONV = {}   # campos de data/hora que o contact-channel traz (formato mascarado)
+CAMPOS_CONV = {}
+CRIACAO = {"conv_min": None, "conv_max": None, "canal": {}}   # datas de criacao (nao e PII)
+LEITURA_TOTAL = {"conversas": 0, "criada_7d_antes_da_1a_msg": 0, "msgs": 0, "total_api_soma": 0}  # detecta corte de historico   # campos de data/hora que o contact-channel traz (formato mascarado)
 FORMATOS = {}   # amostra do FORMATO das datas recebidas (digitos mascarados, sem PII) - diagnostico no /saude
 
 def _amostra(campo, v):
@@ -198,8 +200,12 @@ class _Batch:
 
 # ============================================================================= CONVERSAS
 def _lt(cc):
-    return (cc.get("lastMessageTime") or (cc.get("conversation") or {}).get("updatedAt")
-            or cc.get("updatedAt") or "")
+    # 29/10: lastMessageTime vem None; conversation.updatedAt muda por evento de ticket (falso "ativo").
+    # Fonte real da atividade = data da ULTIMA MENSAGEM.
+    cv = cc.get("conversation") or {}
+    lm = cv.get("lastMessage") if isinstance(cv.get("lastMessage"), dict) else {}
+    return (lm.get("createdAt") or cv.get("lastActivityTime") or cc.get("lastMessageTime")
+            or cv.get("updatedAt") or cc.get("updatedAt") or "")
 
 def _criado(cc):
     return cc.get("createdAt") or (cc.get("conversation") or {}).get("createdAt") or ""
@@ -221,6 +227,16 @@ def _lista(desde_dt=None, cap=LISTA_CAP):
         for c in ccs:
             _amostra("lastMessageTime", c.get("lastMessageTime"))
             _campos_conv(c)
+            try:
+                cr = _iso(_parse(_criado(c))) if _parse(_criado(c)) else None
+                if cr:
+                    CRIACAO["conv_min"] = min(CRIACAO["conv_min"] or cr, cr)
+                    CRIACAO["conv_max"] = max(CRIACAO["conv_max"] or cr, cr)
+                ch = (c.get("channel") or {}).get("createdAt") if isinstance(c.get("channel"), dict) else None
+                if ch:
+                    CRIACAO["canal"][str(ch)[:10]] = CRIACAO["canal"].get(str(ch)[:10], 0) + 1
+            except Exception:
+                pass
             d = _parse(_lt(c))
             if desde_dt and d is None:
                 abaixo += 1          # sem data legivel: nao entra no incremental (fica para backfill)
@@ -364,6 +380,16 @@ def _coletar_conv(db, cc, forcar_tudo=False):
             itens, total, err, completo = _ler_tudo(cid)
     else:
         itens, total, err, completo = _ler_tudo(cid)
+        try:
+            LEITURA_TOTAL["conversas"] += 1
+            LEITURA_TOTAL["msgs"] += len(itens)
+            LEITURA_TOTAL["total_api_soma"] += int(total or 0)
+            ds = [x for x in (_parse(m.get("date") or m.get("createdAt")) for m in itens) if x]
+            cri = _parse(_criado(cc))
+            if ds and cri and (min(ds) - cri) > dt.timedelta(days=7):
+                LEITURA_TOTAL["criada_7d_antes_da_1a_msg"] += 1
+        except Exception:
+            pass
 
     # GRAVA o que foi lido (mesmo parcial: tudo que foi lido fica registrado). 'completo' diz a verdade.
     b = _Batch(db)
@@ -838,7 +864,7 @@ def saude():
             alertas.append("coletor %s: %s" % (f, ST[f]["erro"]))
     status = "ok" if not alertas else ("falha" if any(("NAO" in a or "recusado" in a) for a in alertas) else "atencao")
     return {"status": status, "gerado_em": _iso(), "alertas": alertas, "fontes": fontes,
-            "coletor": ST, "watermark_conversas": WM.get("conversas_lt"), "id_campo_msgs": ID_CAMPO, "formatos_data": FORMATOS, "campos_data_conversa": CAMPOS_CONV, "datas_msgs_lidas": DATAS_MSG,
+            "coletor": ST, "watermark_conversas": WM.get("conversas_lt"), "id_campo_msgs": ID_CAMPO, "formatos_data": FORMATOS, "campos_data_conversa": CAMPOS_CONV, "datas_msgs_lidas": DATAS_MSG, "leitura_total": LEITURA_TOTAL, "criacao": CRIACAO,
             "backfill": BACKFILL, "contagens": _contagens(),
             "agenda": {"conversas_min": CONV_MIN, "crm": "a cada refresh do cruzamento + fallback %dmin" % CRM_MIN,
                        "vendas": "1x/h (min 10)", "meta": "1x/dia 06h00 (dia anterior) + catchup no boot"}}

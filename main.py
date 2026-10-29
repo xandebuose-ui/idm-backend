@@ -811,3 +811,18 @@ def _debug_cruzamento():
 @app.get("/debug_orfaos_res")
 def _debug_cruzamento_res():
     return {"dbg": _DBG_CRUZ, "prog": _cruz.PROG}
+
+
+# ======================= COLETOR UNICO (passo 2 · SPEC-Coletor-Unico 29/10) =======================
+# ADITIVO: le 1x e grava o bruto (conversas/crm/vendas/meta) no Firestore + GET /saude.
+# Nao altera termometro/Jarbas/painel (seguem FONTE=clinichat ate o passo 4).
+import coletor as _coletor
+app.include_router(_coletor.router)
+_coletor.registrar_extra("tintim_webhook", lambda: {"configurado": bool(TINTIM_WEBHOOK_KEY), **_TT_STATS})
+
+@app.on_event("startup")
+def _coletor_start():
+    try:
+        _coletor.iniciar()
+    except Exception as e:
+        print("[coletor] falha ao iniciar:", e, flush=True)

@@ -179,63 +179,84 @@ _FONE2UUID = {}     # telefone normalizado -> set de uuids de paciente
 _UUID_OPPS = {}     # uuid -> lista de oportunidades
 _UUID_COMPROU = set()  # uuids que ja compraram (Ganho/CLIENTES)
 _OPP_NOMES = {}     # nome normalizado -> comprou (fallback quando nao achar por telefone)
+_COMPROU_FONE = set()  # telefones que ja compraram (Ganho/CLIENTES), via API interna
+
+INTERNAL = "https://api.clinicaexperts.com.br"
+
+def _app_jwt():
+    # app_jwt (Sanctum) para a API INTERNA de CRM. Preferencia: env CE_APP_JWT; senao o guardado no Firestore.
+    t = os.environ.get("CE_APP_JWT")
+    if t:
+        return t.strip()
+    try:
+        return fw.get_app_jwt()
+    except Exception:
+        return None
+
+def _api_interna_all(path, cap_pages=30):
+    tok = _app_jwt()
+    if not tok:
+        return None, "sem_app_jwt"
+    out, pg = [], 1
+    sep = "&" if "?" in path else "?"
+    while pg <= cap_pages:
+        url = INTERNAL + "/" + path.lstrip("/") + "%spage=%d" % (sep, pg)
+        req = urllib.request.Request(url, headers={
+            "Authorization": "Bearer " + tok, "User-Agent": mf.UA, "Accept": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=45) as r:
+                d = json.loads(r.read().decode("utf-8", "ignore"))
+        except urllib.error.HTTPError as e:
+            return (out or None), "http_%s" % e.code
+        except Exception as e:
+            return (out or None), str(e)[:60]
+        data = d.get("data") or []
+        out += data
+        m = d.get("meta") or {}
+        total = m.get("total") or m.get("of") or 0
+        if not data or (total and len(out) >= total):
+            break
+        pg += 1
+    return out, None
 
 def _indice_ce():
+    # Oportunidades pela API INTERNA do CRM: traz customer.phone de TODO contato (lead incluso).
+    # A API oficial so devolve patient{uuid,name} SEM telefone, e lead nao vive em /patients -> por isso falhava.
     _OPP_POR_FONE.clear(); _FONE2UUID.clear(); _UUID_OPPS.clear(); _UUID_COMPROU.clear(); _OPP_NOMES.clear()
-    pat_map = {}
-    com_fone = 0
-    pats = mf.api_all("patients?per_page=100", cap_pages=80)
-    for p in pats:
-        u = p.get("uuid")
-        if not u:
-            continue
-        fs = _fones_do_registro(p)
-        pat_map[u] = fs
-        if fs:
-            com_fone += 1
-        for _f in fs:
-            _FONE2UUID.setdefault(_f, set()).add(u)   # telefone -> uuid(s) (direcao certa)
-    opp_fones, comprou_fones = set(), set()
-    opps = mf.api_all("crm/opportunities?sort_column=created_at&sort_direction=desc")
-    match, semfone = 0, 0
+    _COMPROU_FONE.clear()
+    opps, err = _api_interna_all("api/crm/opportunity?per_page=100")
+    opps = opps or []
+    match = 0
     for o in opps:
-        u = (o.get("patient") or {}).get("uuid")
-        pipe = (o.get("pipeline") or {}).get("name") or ""
-        stage = (o.get("stage") or {}).get("name") or ""
-        comprou = pipe.upper().startswith("CLIENTES") or stage.startswith("Ganho")
+        cust = o.get("customer") or {}
+        ph = cust.get("phone")
+        if isinstance(ph, dict):
+            ph = ph.get("number") or ph.get("phone")
+        f = _fone(ph)
+        pipe = o.get("pipeline_name") or (o.get("pipeline") or {}).get("name") or ""
+        st = o.get("stage")
+        stage = (st.get("name") if isinstance(st, dict) else st) or ""
+        comprou = pipe.upper().startswith("CLIENTES") or stage.lower().startswith("ganho")
         od = {"amount": o.get("amount"), "stage": stage, "status": o.get("status"), "pipeline": pipe}
-        if u:
-            _UUID_OPPS.setdefault(u, []).append(od)   # uuid -> oportunidades (sempre tem uuid)
+        if f:
+            _OPP_POR_FONE.setdefault(f, []).append(od)
             if comprou:
-                _UUID_COMPROU.add(u)
-        fs = pat_map.get(u) or set()
-        if fs:
+                _COMPROU_FONE.add(f)
             match += 1
-            opp_fones |= fs
-            if comprou:
-                comprou_fones |= fs
-            for _f in fs:
-                _OPP_POR_FONE.setdefault(_f, []).append(od)
         else:
-            semfone += 1
-            nm = _norm_nome((o.get("patient") or {}).get("name"))
+            nm = _norm_nome(cust.get("name"))
             if len(nm) >= 5 and " " in nm:
                 _OPP_NOMES[nm] = _OPP_NOMES.get(nm, False) or comprou
-    diag = {"n_patients_lote": len(pats), "patients_com_fone": com_fone,
-            "opps": len(opps), "opp_com_fone": match, "opp_sem_fone": semfone,
-            "opp_nomes_n": len(_OPP_NOMES), "fone2uuid_n": len(_FONE2UUID), "uuid_com_opp": len(_UUID_OPPS)}
-    return opp_fones, comprou_fones, _OPP_NOMES, len(opps), diag
+    diag = {"fonte": "api_interna", "opps": len(opps), "opp_com_fone": match,
+            "fones_distintos": len(_OPP_POR_FONE), "compraram_fones": len(_COMPROU_FONE),
+            "opp_nomes_n": len(_OPP_NOMES), "erro_interna": err}
+    return set(_OPP_POR_FONE.keys()), set(_COMPROU_FONE), _OPP_NOMES, len(opps), diag
 
 
 def _opps_do_fone(fone_raw):
-    # telefone -> uuid(s) do paciente -> oportunidades (direcao confiavel). Fallback no caminho antigo.
+    # telefone -> oportunidades (index da API interna: tem customer.phone de lead e cliente).
     f = _fone(fone_raw)
-    out = []
-    for u in _FONE2UUID.get(f, ()):  # inclui cadastros duplicados com o mesmo telefone
-        out += _UUID_OPPS.get(u, [])
-    if not out:
-        out = _OPP_POR_FONE.get(f, [])
-    return out, f
+    return list(_OPP_POR_FONE.get(f, [])), f
 
 
 _IDX_CACHE = {"t": 0.0, "data": None}
@@ -251,37 +272,38 @@ def indice_ce_cached(ttl=1800):
     return _IDX_CACHE["data"]
 
 def classifica_identidade(fone_raw, nome=None, idx=None):
-    # Sinal de APOIO: cliente | lead_cadastrado | novo. Cruza por telefone -> uuid -> oportunidade.
+    # Sinal de APOIO: cliente | lead_cadastrado | novo. Cruza por telefone -> oportunidade (API interna).
     f = _fone(fone_raw)
     if not f:
         return "novo"
-    uuids = _FONE2UUID.get(f, set())
-    comprou = any(u in _UUID_COMPROU for u in uuids) or _eh_comprador(f)
-    tem_opp = any(u in _UUID_OPPS for u in uuids)
-    if not tem_opp and not uuids:
+    comprou = (f in _COMPROU_FONE) or _eh_comprador(f)
+    tem_opp = bool(_OPP_POR_FONE.get(f))
+    if not tem_opp:
         nm = _norm_nome(nome)
         if len(nm) >= 5 and " " in nm and nm in _OPP_NOMES:
             tem_opp = True
             comprou = comprou or _OPP_NOMES[nm]
     if comprou:
         return "cliente"
-    if tem_opp or uuids:   # tem cadastro no CE = lead cadastrado
+    if tem_opp:   # tem oportunidade/cadastro no CE = lead cadastrado
         return "lead_cadastrado"
     return "novo"
 
 
 
 def situacao_lead(fone_raw):
-    # 'sem_opp' = sem oportunidade no CRM; 'perdido' = todas Perdido/Desqualificado; 'ativo' = tem opp viva.
+    # Olha SO o funil LEADS: 'ativo' = tem opp LEADS viva (nao Perdido/Desqualificado/Ganho);
+    # 'perdido' = tem opp mas nenhuma LEADS viva (Perdido/Desqualif. ou so Reativacao/Cliente -> Reativacao);
+    # 'sem_opp' = nenhuma oportunidade (furo do comercial).
     opps, _f = _opps_do_fone(fone_raw)
     if not opps:
         return "sem_opp"
-    ativos = 0
     for o in opps:
+        pipe = (o.get("pipeline") or "").upper()
         s = (o.get("stage") or "").lower()
-        if not (s.startswith("perdido") or s.startswith("desqualific")):
-            ativos += 1
-    return "ativo" if ativos else "perdido"
+        if pipe.startswith("LEADS") and not (s.startswith("perdido") or s.startswith("desqualific") or s.startswith("ganho")):
+            return "ativo"
+    return "perdido"
 
 
 def contexto_ce(fone_raw, nome=None):
@@ -313,11 +335,27 @@ def _prog(msg):
     PROG["etapa"] = msg; PROG["em"] = int(time.time())
     print("[orfaos] " + msg, flush=True)
 
+def verificar_gate():
+    # Gate de SAUDE (sem PII): o cruzamento so vale se a API interna respondeu com volume plausivel.
+    # Se o app_jwt falhar/expirar, _OPP_POR_FONE vem vazio -> gate falha -> NAO publica (mantem dado antigo).
+    fones = len(_OPP_POR_FONE)
+    opps_total = sum(len(v) for v in _OPP_POR_FONE.values())
+    min_fones = int(os.environ.get("GATE_MIN_FONES", "120"))
+    passou = (fones >= min_fones) and (len(_COMPROU_FONE) > 0) and (opps_total >= min_fones)
+    return {"passou": passou, "fones_com_opp": fones, "opps_total": opps_total,
+            "compraram": len(_COMPROU_FONE), "min_exigido": min_fones}
+
+
 def run_orfaos(max_msg=130):
     t0 = time.time()
     _prog("START")
     opp_fones, comprou_fones, opp_nomes, n_opps, idx_diag = _indice_ce()
     _prog('indice ok opps=%d' % n_opps)
+    _GATE = verificar_gate()
+    if not _GATE["passou"]:
+        _prog('GATE FALHOU fones=%d min=%d — NAO publica' % (_GATE["fones_com_opp"], _GATE["min_exigido"]))
+        return {"gerado_em": dt.datetime.now().isoformat(timespec="seconds"),
+                "gate_falhou": True, "gate": _GATE, "diag_idx": idx_diag, "opps_crm": n_opps}
     _IDX_CACHE["data"] = (opp_fones, comprou_fones, opp_nomes); _IDX_CACHE["t"] = time.time()
     desde = os.environ.get("ESCUTA_DESDE") or (dt.date.today() - dt.timedelta(days=int(os.environ.get("ESCUTA_DIAS", "90")))).isoformat()
     convs = _lista(None)
@@ -345,10 +383,9 @@ def run_orfaos(max_msg=130):
         if not f:
             buckets["sem_telefone"] += 1
             continue
-        _uuids = _FONE2UUID.get(f, set())
-        tem_opp = any(_u in _UUID_OPPS for _u in _uuids)
-        comprou = any(_u in _UUID_COMPROU for _u in _uuids) or _eh_comprador(f)
-        if not tem_opp and not _uuids:
+        tem_opp = bool(_OPP_POR_FONE.get(f))
+        comprou = (f in _COMPROU_FONE) or _eh_comprador(f)
+        if not tem_opp:
             nm = _norm_nome(ct.get("name"))
             if len(nm) >= 5 and " " in nm and nm in _OPP_NOMES:
                 tem_opp = True

@@ -305,6 +305,45 @@ def cracha_status_publico():
     return _fw.token_info()
 
 
+@app.post("/ingest_app_jwt")
+async def ingest_app_jwt(request: Request):
+    # Recebe o app_jwt (Sanctum) da sessao logada do CE e SO guarda se ele realmente funciona
+    # na API interna de CRM (auto-validacao: nao precisa de segredo, so um token valido passa).
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    token = (body.get("token") or "").strip()
+    if len(token) < 20:
+        raise HTTPException(status_code=400, detail="token invalido")
+    import urllib.request as _u, urllib.error as _ue
+    req = _u.Request("https://api.clinicaexperts.com.br/api/crm/opportunity?page=1&per_page=1",
+                     headers={"Authorization": "Bearer " + token,
+                              "User-Agent": "Mozilla/5.0 Chrome/129.0", "Accept": "application/json"})
+    try:
+        with _u.urlopen(req, timeout=20) as r:
+            ok_ce = (r.status == 200)
+    except _ue.HTTPError as e:
+        return {"ok": False, "motivo": "token nao validou no CE", "status": e.code}
+    except Exception as e:
+        return {"ok": False, "motivo": str(e)[:100]}
+    if not ok_ce:
+        return {"ok": False, "motivo": "token nao validou no CE"}
+    saved = _fw.save_app_jwt(token, origem=body.get("origem"))
+    return {"ok": bool(saved), "validado_no_ce": True}
+
+
+@app.get("/gate")
+def gate_check():
+    import motor_orfaos as _o
+    try:
+        _of, _cf, _on, nopps, diag = _o._indice_ce()
+        g = _o.verificar_gate()
+        return {"gate": g, "diag": diag, "tem_app_jwt": _o._app_jwt() is not None}
+    except Exception as e:
+        return {"erro": str(e)[:200]}
+
+
 # ---- CORS p/ receber o crachá direto da página do CE ----
 from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
@@ -565,7 +604,8 @@ def _maybe_tick():
             _LAST_TICK["term"] = now
             if (_last_orf.get("result") or {}).get("universo"):
                 _th.Thread(target=lambda: _rodar_termometro("tick"), daemon=True).start()
-        if now - _LAST_TICK["orf"] > 1800:
+        orf_vazio = not ((_last_orf.get("result") or {}).get("universo"))
+        if (now - _LAST_TICK["orf"] > 1800) or (orf_vazio and now - _LAST_TICK["orf"] > 90):
             _LAST_TICK["orf"] = now
             _th.Thread(target=lambda: _rodar_orfaos("tick"), daemon=True).start()
     except Exception as _e:

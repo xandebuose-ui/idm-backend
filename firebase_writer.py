@@ -57,6 +57,7 @@ def push_fila(resultado):
 # ---- crachá (token do CliniChat) — monitor de conversa ----
 _TOKEN_COLL = os.environ.get("ESCUTA_TOKEN_COLL", "escuta_token")
 _TOKEN_DOC = os.environ.get("ESCUTA_TOKEN_DOC", "clinichat")
+_APPJWT_DOC = os.environ.get("ESCUTA_APPJWT_DOC", "app_jwt")
 
 def _decode_exp(token):
     try:
@@ -97,6 +98,34 @@ def get_token():
     except Exception as e:
         print("[token] erro leitura:", e)
     return None
+
+def save_app_jwt(token, origem=None):
+    db = _get_db()
+    if db is None:
+        return False
+    try:
+        import time
+        db.collection(_TOKEN_COLL).document(_APPJWT_DOC).set({
+            "token": token, "atualizado_em": int(time.time()), "origem": (origem or "")[:60]})
+        print("[appjwt] guardado")
+        return True
+    except Exception as e:
+        print("[appjwt] erro ao guardar:", e)
+        return False
+
+
+def get_app_jwt():
+    db = _get_db()
+    if db is None:
+        return None
+    try:
+        d = db.collection(_TOKEN_COLL).document(_APPJWT_DOC).get()
+        if d.exists:
+            return d.to_dict().get("token")
+    except Exception as e:
+        print("[appjwt] erro leitura:", e)
+    return None
+
 
 def token_info():
     import time

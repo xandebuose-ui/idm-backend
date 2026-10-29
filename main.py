@@ -67,15 +67,9 @@ def _carregar_termometro_do_firestore():
         _TERM["result"] = res
         _TERM["quando"] = res.get("gerado_em")
         n = 0
-        for _b in ("quente", "morno", "frio", "cross_sell", "operacional"):
-            for _l in (res.get(_b) or []):
-                _cid = _l.get("conv")
-                if _cid is None:
-                    continue
-                _TERM_CACHE[_cid] = ((_l.get("lt") or "", _l.get("identidade") or "novo"),
-                                     {"temperatura": _b, "motivo": _l.get("motivo", "")})
-                n += 1
-        print("[termometro] carregado do firestore: %d leads (resiliencia a restart)" % n, flush=True)
+        # NAO semeia _TERM_CACHE: as chaves antigas (lt='') nao casavam com o universo novo
+        # e entupiam o orcamento de classificacao (pendente travava). O cache reconstroi ao vivo.
+        print("[termometro] resultado carregado do firestore (cache NAO semeado de proposito)", flush=True)
     except Exception as e:
         print("[termometro] load firestore erro:", e, flush=True)
 
@@ -526,7 +520,7 @@ def _rodar_termometro(motivo="poll"):
             nome = L.get("nome"); fone_raw = L.get("telefone"); lt = L.get("lt") or ""
             chave = (lt, ident)
             cache = _TERM_CACHE.get(cid)
-            if cache and lt and cache[0] == chave:
+            if cache and cache[0] == chave:
                 cls = cache[1]
             elif feitas < orc:
                 cls = _jarbas.classifica_lead(cid, _TEMP_MODEL, ident)

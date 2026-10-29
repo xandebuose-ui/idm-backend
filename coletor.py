@@ -50,6 +50,18 @@ def _iso(d=None):
     d = d or _utcnow()
     return d.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + "%03dZ" % (d.microsecond // 1000)
 
+FORMATOS = {}   # amostra do FORMATO das datas recebidas (digitos mascarados, sem PII) - diagnostico no /saude
+
+def _amostra(campo, v):
+    try:
+        import re as _re
+        k = "%s:%s:%s" % (campo, type(v).__name__, _re.sub(r"[0-9]", "9", str(v))[:40])
+        FORMATOS[k] = FORMATOS.get(k, 0) + 1
+        if len(FORMATOS) > 40:
+            FORMATOS.pop(next(iter(FORMATOS)))
+    except Exception:
+        pass
+
 def _parse(v):
     """ISO (com Z/offset/ms) ou epoch (s/ms) -> datetime UTC aware. None se nao der."""
     if v is None or v == "":
@@ -189,8 +201,12 @@ def _lista(desde_dt=None, cap=LISTA_CAP):
         total = ((data.get("pagination") or {}).get("total")) or 0
         abaixo = 0
         for c in ccs:
+            _amostra("lastMessageTime", c.get("lastMessageTime"))
             d = _parse(_lt(c))
-            if desde_dt and d and d <= desde_dt:
+            if desde_dt and d is None:
+                abaixo += 1          # sem data legivel: nao entra no incremental (fica para backfill)
+                continue
+            if desde_dt and d <= desde_dt:
                 abaixo += 1
                 continue
             out.append(c)
@@ -228,7 +244,8 @@ def _msg_doc(m, cid, fk):
     mid, campo = _msg_id(m)
     ID_CAMPO[campo] = ID_CAMPO.get(campo, 0) + 1
     d = m.get("date") or m.get("createdAt") or ""
-    dd = _parse(d) or _utcnow()
+    _amostra("msg_date", d)
+    dd = _parse(d)
     tipo = (m.get("type") or "text").lower()
     midia = tipo in _MIDIA or tipo not in ("text", "chat", "")
     txt = (m.get("content") or "")
@@ -237,15 +254,15 @@ def _msg_doc(m, cid, fk):
     st = m.get("senderType") or ""
     snd = m.get("sender") if isinstance(m.get("sender"), dict) else {}
     doc = {
-        "id": mid, "conv": cid, "fone": fk, "data": _iso(dd), "data_raw": str(d),
+        "id": mid, "conv": cid, "fone": fk, "data": _iso(dd) if dd else None, "data_raw": str(d),
         "de": "lead" if st == "contacts" else ("equipe" if st == "users" else (st or "sistema")),
         "sender_type": st, "remetente": snd.get("name"), "remetente_ext": snd.get("externalId"),
         "tipo": tipo, "midia": bool(midia), "texto": txt[:20000],
         "transcricao": (m.get("audioTextContent") or "")[:20000],
         "atividade": m.get("activityType"), "lida_em": m.get("readAt"),
-        "gravado_em": _iso(), "expira_em": dd + dt.timedelta(days=RETENCAO_DIAS),
+        "gravado_em": _iso(), "expira_em": (dd or _utcnow()) + dt.timedelta(days=RETENCAO_DIAS),
     }
-    mes = (dd - dt.timedelta(hours=3)).strftime("%Y-%m")
+    mes = (dd - dt.timedelta(hours=3)).strftime("%Y-%m") if dd else "sem_data"   # nunca inventa data
     return mid, mes, doc, dd
 
 def _ler_tudo(cid):
@@ -327,6 +344,8 @@ def _coletar_conv(db, cc, forcar_tudo=False):
     for m in itens:
         mid, mes, doc, dd = _msg_doc(m, cid, fk)
         b.set(ref.collection("msgs_" + mes).document(mid), doc)
+        if dd is None:
+            continue
         if doc["atividade"] in (None, "", "message") or doc["texto"] or doc["midia"]:
             if ult_dt is None or dd > ult_dt:
                 ult_dt, ult_de = dd, doc["de"]
@@ -713,7 +732,7 @@ def _p_tintim():
 
 _CONT = {"t": 0.0, "v": None}
 
-def _contagens(ttl=600):
+def _contagens(ttl=180):
     if _CONT["v"] is not None and time.time() - _CONT["t"] < ttl:
         return _CONT["v"]
     db = _db()
@@ -741,6 +760,10 @@ def _contagens(ttl=600):
         if isinstance(n, int) and n:
             por_mes[mes] = n
             msgs += n
+    n = cnt(db.collection_group("msgs_sem_data"))
+    if isinstance(n, int) and n:
+        por_mes["sem_data"] = n
+        msgs += n
     out["mensagens"] = msgs
     out["mensagens_por_mes"] = por_mes
     out["obs"] = "escuta_crm inclui o doc legado 'mapa' (+1)"
@@ -788,7 +811,7 @@ def saude():
             alertas.append("coletor %s: %s" % (f, ST[f]["erro"]))
     status = "ok" if not alertas else ("falha" if any(("NAO" in a or "recusado" in a) for a in alertas) else "atencao")
     return {"status": status, "gerado_em": _iso(), "alertas": alertas, "fontes": fontes,
-            "coletor": ST, "watermark_conversas": WM.get("conversas_lt"), "id_campo_msgs": ID_CAMPO,
+            "coletor": ST, "watermark_conversas": WM.get("conversas_lt"), "id_campo_msgs": ID_CAMPO, "formatos_data": FORMATOS,
             "backfill": BACKFILL, "contagens": _contagens(),
             "agenda": {"conversas_min": CONV_MIN, "crm": "a cada refresh do cruzamento + fallback %dmin" % CRM_MIN,
                        "vendas": "1x/h (min 10)", "meta": "1x/dia 06h00 (dia anterior) + catchup no boot"}}

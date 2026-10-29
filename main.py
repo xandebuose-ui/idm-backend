@@ -251,6 +251,13 @@ async def webhook_tintim(request: Request, k: str = ""):
         pass
     return {"ok": True, "evento": evt}
 
+# ---------------- Meta Ads (token do usuario do sistema, so leitura) ----------------
+import meta_ads as _meta
+
+@app.get("/meta_status")
+def meta_status():
+    return _meta.status()
+
 @app.get("/webhook/tintim/status")
 def webhook_tintim_status():
     return {"configurado": bool(TINTIM_WEBHOOK_KEY), **_TT_STATS}

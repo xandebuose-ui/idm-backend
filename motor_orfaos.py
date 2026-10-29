@@ -394,7 +394,7 @@ def run_orfaos(max_msg=130):
             buckets["cliente_operacional" if comprou else "lead_andamento"] += 1
             universo.append({"conv": c.get("conversationId"), "nome": ct.get("name"),
                              "telefone": ct.get("phone") or c.get("identifier"),
-                             "lt": c.get("lastMessageTime") or "",
+                             "lt": c.get("lastMessageTime") or (c.get("conversation") or {}).get("updatedAt") or c.get("updatedAt") or "",
                              "criado": (c.get("createdAt") or (c.get("conversation") or {}).get("createdAt") or "")[:10],
                              "identidade": "cliente" if comprou else "lead_cadastrado",
                              "situacao": situacao_lead(f)})
@@ -428,7 +428,7 @@ def run_orfaos(max_msg=130):
             buckets[bucket] += 1
             universo.append({"conv": cid, "nome": ct.get("name"),
                              "telefone": ct.get("phone") or c.get("identifier"),
-                             "lt": c.get("lastMessageTime") or "",
+                             "lt": c.get("lastMessageTime") or (c.get("conversation") or {}).get("updatedAt") or c.get("updatedAt") or "",
                              "criado": (c.get("createdAt") or (c.get("conversation") or {}).get("createdAt") or "")[:10],
                              "identidade": classifica_identidade(f, ct.get("name")),
                              "situacao": "sem_opp"})

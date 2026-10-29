@@ -531,6 +531,8 @@ def _rodar_termometro(motivo="poll"):
             elif feitas < orc:
                 cls = _jarbas.classifica_lead(cid, _TEMP_MODEL, ident)
                 feitas += 1; _t.sleep(0.4)
+                if feitas <= 4:
+                    print("[termdbg] cid=%s ident=%s lt=%r temp=%r mot=%s" % (str(cid)[:8], ident, (lt or "")[:10], cls.get("temperatura"), str(cls.get("motivo"))[:50]), flush=True)
                 if cls.get("temperatura") in ("quente", "morno", "frio", "cross_sell", "operacional"):
                     _TERM_CACHE[cid] = (chave, cls)
             elif cache:

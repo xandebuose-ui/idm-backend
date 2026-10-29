@@ -50,6 +50,8 @@ def _iso(d=None):
     d = d or _utcnow()
     return d.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + "%03dZ" % (d.microsecond // 1000)
 
+DATAS_MSG = {"min": None, "max": None, "n": 0}   # intervalo real das datas de mensagem lidas
+CAMPOS_CONV = {}   # campos de data/hora que o contact-channel traz (formato mascarado)
 FORMATOS = {}   # amostra do FORMATO das datas recebidas (digitos mascarados, sem PII) - diagnostico no /saude
 
 def _amostra(campo, v):
@@ -59,6 +61,22 @@ def _amostra(campo, v):
         FORMATOS[k] = FORMATOS.get(k, 0) + 1
         if len(FORMATOS) > 40:
             FORMATOS.pop(next(iter(FORMATOS)))
+    except Exception:
+        pass
+
+def _campos_conv(c):
+    try:
+        import re as _re
+        if len(CAMPOS_CONV) > 60:
+            return
+        def walk(o, pre, dep):
+            for k, v in (o or {}).items():
+                kl = k.lower()
+                if isinstance(v, dict) and dep < 2:
+                    walk(v, pre + k + ".", dep + 1)
+                elif any(x in kl for x in ("time", "date", "at")) and not isinstance(v, (dict, list)):
+                    CAMPOS_CONV[pre + k] = _re.sub(r"[0-9]", "9", str(v))[:30]
+        walk(c, "", 0)
     except Exception:
         pass
 
@@ -202,6 +220,7 @@ def _lista(desde_dt=None, cap=LISTA_CAP):
         abaixo = 0
         for c in ccs:
             _amostra("lastMessageTime", c.get("lastMessageTime"))
+            _campos_conv(c)
             d = _parse(_lt(c))
             if desde_dt and d is None:
                 abaixo += 1          # sem data legivel: nao entra no incremental (fica para backfill)
@@ -211,7 +230,8 @@ def _lista(desde_dt=None, cap=LISTA_CAP):
                 continue
             out.append(c)
         frm += step
-        if not ccs or frm >= total or (desde_dt and abaixo == len(ccs)):
+        # NAO para pela ordem: lastMessageTime vem None (29/10) e a ordenacao nao e confiavel -> lista tudo
+        if not ccs or frm >= total:
             break
         time.sleep(0.2)
     return out, None
@@ -246,6 +266,13 @@ def _msg_doc(m, cid, fk):
     d = m.get("date") or m.get("createdAt") or ""
     _amostra("msg_date", d)
     dd = _parse(d)
+    if dd:
+        x = _iso(dd)
+        DATAS_MSG["n"] += 1
+        if DATAS_MSG["min"] is None or x < DATAS_MSG["min"]:
+            DATAS_MSG["min"] = x
+        if DATAS_MSG["max"] is None or x > DATAS_MSG["max"]:
+            DATAS_MSG["max"] = x
     tipo = (m.get("type") or "text").lower()
     midia = tipo in _MIDIA or tipo not in ("text", "chat", "")
     txt = (m.get("content") or "")
@@ -811,7 +838,7 @@ def saude():
             alertas.append("coletor %s: %s" % (f, ST[f]["erro"]))
     status = "ok" if not alertas else ("falha" if any(("NAO" in a or "recusado" in a) for a in alertas) else "atencao")
     return {"status": status, "gerado_em": _iso(), "alertas": alertas, "fontes": fontes,
-            "coletor": ST, "watermark_conversas": WM.get("conversas_lt"), "id_campo_msgs": ID_CAMPO, "formatos_data": FORMATOS,
+            "coletor": ST, "watermark_conversas": WM.get("conversas_lt"), "id_campo_msgs": ID_CAMPO, "formatos_data": FORMATOS, "campos_data_conversa": CAMPOS_CONV, "datas_msgs_lidas": DATAS_MSG,
             "backfill": BACKFILL, "contagens": _contagens(),
             "agenda": {"conversas_min": CONV_MIN, "crm": "a cada refresh do cruzamento + fallback %dmin" % CRM_MIN,
                        "vendas": "1x/h (min 10)", "meta": "1x/dia 06h00 (dia anterior) + catchup no boot"}}

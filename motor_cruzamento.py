@@ -281,7 +281,7 @@ def _opps_do_fone(fone_raw):
 _IDX_CACHE = {"t": 0.0, "data": None}
 
 def indice_ce_cached(ttl=1800):
-    # Reusa o indice ja construido pelo orfaos (compartilhado via _IDX_CACHE); so reconstroi se velho.
+    # Reusa o indice ja construido pelo cruzamento (compartilhado via _IDX_CACHE); so reconstroi se velho.
     now = time.time()
     if _IDX_CACHE["data"] and (now - _IDX_CACHE["t"]) < ttl:
         return _IDX_CACHE["data"]
@@ -352,7 +352,7 @@ PROG = {"etapa": "boot", "em": 0}
 
 def _prog(msg):
     PROG["etapa"] = msg; PROG["em"] = int(time.time())
-    print("[orfaos] " + msg, flush=True)
+    print("[cruzamento] " + msg, flush=True)
 
 def verificar_gate():
     # Gate de SAUDE (sem PII): o cruzamento so vale se a API interna respondeu com volume plausivel.
@@ -365,7 +365,7 @@ def verificar_gate():
             "compraram": len(_COMPROU_FONE), "min_exigido": min_fones}
 
 
-def run_orfaos(max_msg=130):
+def rodar_cruzamento(max_msg=130):
     t0 = time.time()
     _prog("START")
     opp_fones, comprou_fones, opp_nomes, n_opps, idx_diag = _indice_ce()
@@ -490,7 +490,7 @@ def run_orfaos(max_msg=130):
             _dbu.collection(os.environ.get("ESCUTA_ORFAOS_COLL", "escuta_orfaos")).document("universo").set(
                 {"universo": universo[:600], "origem": origem_tot, "gerado_em": resumo["gerado_em"]})
     except Exception as _eu:
-        print("[orfaos] universo firestore erro:", _eu, flush=True)
+        print("[cruzamento] universo firestore erro:", _eu, flush=True)
     _grava(resumo, itens)
     return resumo
 
@@ -499,14 +499,15 @@ def _grava(resumo, itens):
     if db is None:
         return
     try:
+        # colecao interna do cruzamento (nome legado "escuta_orfaos" mantido p/ nao migrar dado vivo)
         coll = os.environ.get("ESCUTA_ORFAOS_COLL", "escuta_orfaos")
         payload = dict(resumo)
         payload["itens"] = itens[:200]
         payload.pop("universo", None)
         db.collection(coll).document("_snapshot").set(payload)
-        print("[orfaos] gravado: %s" % resumo["buckets"])
+        print("[cruzamento] gravado: %s" % resumo["buckets"])
     except Exception as e:
-        print("[orfaos] erro ao gravar:", e)
+        print("[cruzamento] erro ao gravar:", e)
 
 if __name__ == "__main__":
-    print(run_orfaos())
+    print(rodar_cruzamento())

@@ -87,22 +87,22 @@ def _carregar_universo_firestore():
         u = data.get("universo") or []
         if not u:
             return
-        cur = dict(_last_orf.get("result") or {})
+        cur = dict(_last_cruz.get("result") or {})
         if not cur.get("universo"):
             cur["universo"] = u
             cur.setdefault("origem", data.get("origem") or {})
-            _last_orf["result"] = cur
-            _last_orf["quando"] = _last_orf.get("quando") or data.get("gerado_em")
-            print("[orfaos] universo carregado do firestore: %d" % len(u), flush=True)
+            _last_cruz["result"] = cur
+            _last_cruz["quando"] = _last_cruz.get("quando") or data.get("gerado_em")
+            print("[cruzamento] universo carregado do firestore: %d" % len(u), flush=True)
     except Exception as e:
-        print("[orfaos] load universo erro:", e, flush=True)
+        print("[cruzamento] load universo erro:", e, flush=True)
 
 
 def _startup():
     sched = BackgroundScheduler(timezone="America/Sao_Paulo")
     sched.add_job(lambda: _rodar("poll"), "interval", minutes=POLL_MINUTES)
     sched.add_job(_vigia_cracha, "interval", minutes=30)
-    sched.add_job(lambda: _rodar_orfaos("poll"), "interval", minutes=5)
+    sched.add_job(lambda: _rodar_cruzamento("poll"), "interval", minutes=5)
     sched.add_job(lambda: _rodar_termometro("poll"), "interval", minutes=5)
     try:
         _vigia_cracha()
@@ -110,7 +110,7 @@ def _startup():
         pass
     sched.start()
     try:
-        threading.Thread(target=_rodar_orfaos, args=("startup",), daemon=True).start()
+        threading.Thread(target=_rodar_cruzamento, args=("startup",), daemon=True).start()
     except Exception:
         pass
     try:
@@ -119,7 +119,7 @@ def _startup():
         threading.Timer(25, lambda: _rodar_termometro("startup")).start()
     except Exception:
         pass
-    print(f"[startup] poll {POLL_MINUTES}min; vigia cracha 30min; orfaos 15min")
+    print(f"[startup] poll {POLL_MINUTES}min; vigia cracha 30min; cruzamento 15min")
 
 def _auth(cred: HTTPBasicCredentials = Depends(security)):
     ok_u = PANEL_USER and hmac.compare_digest(cred.username, PANEL_USER)
@@ -152,7 +152,7 @@ async def webhook(request: Request, x_idm_secret: str = Header(default="")):
     body = await request.json()
     evento = (body.get("event") or body.get("type") or "").lower()
     if any(k in evento for k in ("patient", "booking", "opportunity", "lead", "crm", "message", "chat", "conversation", "ticket")):
-        threading.Thread(target=_rodar_orfaos, args=("webhook",), daemon=True).start()
+        threading.Thread(target=_rodar_cruzamento, args=("webhook",), daemon=True).start()
         return {"ok": True, "acionado": True, "detalhe": _rodar(f"webhook:{evento}")}
     return {"ok": True, "acionado": False, "evento": evento}
 
@@ -166,7 +166,7 @@ async def webhook_ce_crm(request: Request):
     # confirmado em 29/10/2026 com lead real. Por isso NAO extraimos telefone aqui: a acao correta
     # e disparar um REFRESH do cruzamento (debounce 60s), que re-busca a API interna ja com o lead
     # novo + telefone e re-classifica. Nunca destrutivo; nao exige segredo; nao altera a logica
-    # travada (apenas chama a mesma pipeline _rodar_orfaos que o poll ja usa).
+    # travada (apenas chama a mesma pipeline _rodar_cruzamento que o poll ja usa).
     import json as _j, time as _t
     try:
         body = await request.json()
@@ -193,7 +193,7 @@ async def webhook_ce_crm(request: Request):
         now = _t.time()
         if now - _LAST_TICK.get("wh", 0.0) > 60:
             _LAST_TICK["wh"] = now
-            threading.Thread(target=_rodar_orfaos, args=("webhook-crm",), daemon=True).start()
+            threading.Thread(target=_rodar_cruzamento, args=("webhook-crm",), daemon=True).start()
             acionou = True
     return {"ok": True, "evt": evt, "pipe": pipe, "stage": stage, "acionou_refresh": acionou}
 
@@ -377,7 +377,7 @@ async def ingest_app_jwt(request: Request):
 
 @app.get("/gate")
 def gate_check():
-    import motor_orfaos as _o
+    import motor_cruzamento as _o
     try:
         _of, _cf, _on, nopps, diag = _o._indice_ce()
         g = _o.verificar_gate()
@@ -425,45 +425,45 @@ def diag_clinichat():
         return {"ok": False, "motivo": str(e)[:120]}
 
 
-# ---- Bloco B: motor de orfaos (conversa = verdade; so-leitura) ----
-import motor_orfaos as _orf
-_last_orf = {"result": None, "quando": None}
-_orf_lock = threading.Lock()
+# ---- Bloco B: motor de cruzamento (conversa = verdade; so-leitura) ----
+import motor_cruzamento as _cruz
+_last_cruz = {"result": None, "quando": None}
+_cruz_lock = threading.Lock()
 
 def _sp_now():
     return dt.datetime.utcnow() - dt.timedelta(hours=3)
 
-def _rodar_orfaos(motivo="poll"):
+def _rodar_cruzamento(motivo="poll"):
     if motivo == "poll":
         n = _sp_now()
         mins = n.hour * 60 + n.minute
         if mins < 510 or mins > 1200:
             return {"ok": True, "skip": "fora do horario comercial"}
-    if not _orf_lock.acquire(blocking=False):
+    if not _cruz_lock.acquire(blocking=False):
         return {"ok": True, "skip": "ja rodando"}
     try:
-        res = _orf.run_orfaos()
-        _last_orf["result"] = res
-        _last_orf["quando"] = res.get("gerado_em")
+        res = _cruz.rodar_cruzamento()
+        _last_cruz["result"] = res
+        _last_cruz["quando"] = res.get("gerado_em")
         return res
     except Exception as e:
         import traceback as _tb
-        _last_orf["erro"] = repr(e)[:300]; _last_orf["erro_em"] = _sp_now().isoformat(timespec="seconds")
-        print("[orfaos] erro:", e); print(_tb.format_exc(), flush=True)
+        _last_cruz["erro"] = repr(e)[:300]; _last_cruz["erro_em"] = _sp_now().isoformat(timespec="seconds")
+        print("[cruzamento] erro:", e); print(_tb.format_exc(), flush=True)
         return {"ok": False, "erro": str(e)[:160]}
     finally:
-        _orf_lock.release()
+        _cruz_lock.release()
 
 @app.post("/run_orfaos")
-def run_orfaos_now(x_idm_secret: str = Header(default="")):
+def rodar_cruzamento_now(x_idm_secret: str = Header(default="")):
     if not WEBHOOK_SECRET or not hmac.compare_digest(x_idm_secret, WEBHOOK_SECRET):
         raise HTTPException(status_code=401, detail="unauthorized")
-    threading.Thread(target=_rodar_orfaos, args=("manual",), daemon=True).start()
+    threading.Thread(target=_rodar_cruzamento, args=("manual",), daemon=True).start()
     return {"ok": True, "started": True}
 
 @app.get("/orfaos.json")
-def orfaos_json():
-    return {"ok": True, "quando": _last_orf["quando"], "result": _last_orf["result"], "erro": _last_orf.get("erro"), "progresso": _orf.PROG}
+def cruzamento_json():
+    return {"ok": True, "quando": _last_cruz["quando"], "result": _last_cruz["result"], "erro": _last_cruz.get("erro"), "progresso": _cruz.PROG}
 
 
 # ---- Jarbas: analise por lead (sob demanda; modelo via JARBAS_MODEL) ----
@@ -498,7 +498,7 @@ def jarbas_teste(x_idm_secret: str = Header(default="")):
     # Smoke-test protegido: pega a 1a conversa real do inbox e roda o Jarbas.
     if not WEBHOOK_SECRET or not hmac.compare_digest(x_idm_secret, WEBHOOK_SECRET):
         raise HTTPException(status_code=401, detail="unauthorized")
-    convs = _orf._lista("inbox", cap=80)
+    convs = _cruz._lista("inbox", cap=80)
     tentativas = 0
     for c in convs:
         cid = c.get("conversationId")
@@ -524,7 +524,7 @@ def _fonte_de_leads():
     # Futuro (numero dedicado so de leads): TERM_FONTE=dedicado -> inbox ja 100% lead, sem gate.
     # Trocar e 1 env var; o modulo do gate fica removivel sem tocar termometro/painel/Jarbas.
     modo = os.environ.get("TERM_FONTE", "inbox_ce")
-    convs = _orf._lista("inbox", cap=int(os.environ.get("TERM_CAP", "80")))
+    convs = _cruz._lista("inbox", cap=int(os.environ.get("TERM_CAP", "80")))
     aplicar_gate = (modo != "dedicado")
     return convs, aplicar_gate
 
@@ -538,9 +538,9 @@ def _rodar_termometro(motivo="poll"):
         return {"ok": True, "skip": "ja rodando"}
     try:
         print("[termometro] iniciando passada (%s)" % motivo, flush=True)
-        universo = ((_last_orf.get("result") or {}).get("universo")) or []
+        universo = ((_last_cruz.get("result") or {}).get("universo")) or []
         if not universo:
-            print("[termometro] universo do orfaos ainda nao pronto; pulando", flush=True)
+            print("[termometro] universo do cruzamento ainda nao pronto; pulando", flush=True)
             return {"ok": True, "skip": "universo nao pronto"}
         orc = int(os.environ.get("TERM_BATCH", "20"))
         baldes = {"quente": [], "morno": [], "frio": [], "cross_sell": [],
@@ -607,7 +607,7 @@ def _rodar_termometro(motivo="poll"):
                 if dcri >= _sem:
                     _es += 1
         try:
-            _origem = ((_last_orf.get("result") or {}).get("origem")) or {}
+            _origem = ((_last_cruz.get("result") or {}).get("origem")) or {}
         except Exception:
             _origem = {}
         entrada = {"hoje": _eh, "semana": _es, "origem": _origem}
@@ -615,7 +615,7 @@ def _rodar_termometro(motivo="poll"):
         funil = contagem["quente"] + contagem["morno"] + contagem["frio"] + contagem["cross_sell"]
         res = {"gerado_em": _sp_now().isoformat(timespec="seconds"), "total": len(universo),
                "classificadas_no_ciclo": feitas, "em_cache": len(_TERM_CACHE),
-               "fonte": "orfaos_universo", "gate": True,
+               "fonte": "cruzamento", "gate": True,
                "funil": funil, "contagem": contagem, "entrada": entrada,
                "vazamento_total": sum(1 for _b in ("quente", "morno", "frio", "cross_sell")
                                       for _l in baldes[_b] if _l.get("vazamento")),
@@ -635,7 +635,7 @@ def _rodar_termometro(motivo="poll"):
     finally:
         _term_lock.release()
 
-_LAST_TICK = {"term": 0.0, "orf": 0.0}
+_LAST_TICK = {"term": 0.0, "cruz": 0.0}
 
 def _maybe_tick():
     # Ciclo dirigido por trafego (o painel chama a cada ~90s): nao depende do scheduler.
@@ -644,12 +644,12 @@ def _maybe_tick():
     try:
         if now - _LAST_TICK["term"] > 55:
             _LAST_TICK["term"] = now
-            if (_last_orf.get("result") or {}).get("universo"):
+            if (_last_cruz.get("result") or {}).get("universo"):
                 _th.Thread(target=lambda: _rodar_termometro("tick"), daemon=True).start()
-        orf_vazio = not ((_last_orf.get("result") or {}).get("universo"))
-        if (now - _LAST_TICK["orf"] > 1800) or (orf_vazio and now - _LAST_TICK["orf"] > 90):
-            _LAST_TICK["orf"] = now
-            _th.Thread(target=lambda: _rodar_orfaos("tick"), daemon=True).start()
+        cruz_vazio = not ((_last_cruz.get("result") or {}).get("universo"))
+        if (now - _LAST_TICK["cruz"] > 1800) or (cruz_vazio and now - _LAST_TICK["cruz"] > 90):
+            _LAST_TICK["cruz"] = now
+            _th.Thread(target=lambda: _rodar_cruzamento("tick"), daemon=True).start()
     except Exception as _e:
         print("[tick] erro:", _e, flush=True)
 
@@ -678,7 +678,7 @@ def painel_analise(token: str, conv_id: str, nome: str = "", temperatura: str = 
         raise HTTPException(status_code=404, detail="not found")
     ce = {}
     try:
-        ce = _orf.contexto_ce(telefone, nome) if telefone else {}
+        ce = _cruz.contexto_ce(telefone, nome) if telefone else {}
     except Exception as e:
         ce = {"erro": str(e)[:80]}
     r = _jarbas.analisar(conv_id, {"nome": nome, "temperatura": temperatura,
@@ -714,29 +714,29 @@ def painel_tratar(token: str, conv_id: str, lt: str = "", desfazer: bool = False
     return {"ok": True}
 
 
-_DBG_ORF = {}
+_DBG_CRUZ = {}
 
 @app.get("/debug_orfaos")
-def _debug_orfaos():
+def _debug_cruzamento():
     import threading as _th, traceback as _tb
     def _run():
         try:
-            r = _orf.run_orfaos()
-            _DBG_ORF.clear()
-            _DBG_ORF["ok"] = True
-            _DBG_ORF["universo"] = len((r or {}).get("universo") or [])
-            _DBG_ORF["buckets"] = (r or {}).get("buckets")
-            _last_orf["result"] = r
-            _last_orf["quando"] = (r or {}).get("gerado_em")
+            r = _cruz.rodar_cruzamento()
+            _DBG_CRUZ.clear()
+            _DBG_CRUZ["ok"] = True
+            _DBG_CRUZ["universo"] = len((r or {}).get("universo") or [])
+            _DBG_CRUZ["buckets"] = (r or {}).get("buckets")
+            _last_cruz["result"] = r
+            _last_cruz["quando"] = (r or {}).get("gerado_em")
         except Exception as e:
-            _DBG_ORF.clear()
-            _DBG_ORF["ok"] = False
-            _DBG_ORF["erro"] = repr(e)[:200]
-            _DBG_ORF["tb"] = _tb.format_exc()[-1800:]
-    _DBG_ORF.clear(); _DBG_ORF["ok"] = None
+            _DBG_CRUZ.clear()
+            _DBG_CRUZ["ok"] = False
+            _DBG_CRUZ["erro"] = repr(e)[:200]
+            _DBG_CRUZ["tb"] = _tb.format_exc()[-1800:]
+    _DBG_CRUZ.clear(); _DBG_CRUZ["ok"] = None
     _th.Thread(target=_run, daemon=True).start()
     return {"started": True}
 
 @app.get("/debug_orfaos_res")
-def _debug_orfaos_res():
-    return {"dbg": _DBG_ORF, "prog": _orf.PROG}
+def _debug_cruzamento_res():
+    return {"dbg": _DBG_CRUZ, "prog": _cruz.PROG}

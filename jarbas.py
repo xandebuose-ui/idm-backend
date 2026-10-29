@@ -7,7 +7,7 @@ Cache no Firestore por conversa + ultima mensagem (nao reprocessa sem conversa n
 Modelo via env JARBAS_MODEL (default Sonnet). Chave via ANTHROPIC_API_KEY.
 """
 import os, json, time
-import motor_orfaos as _orf   # reusa _cc() e CLINI (leitura autenticada do CliniChat)
+import motor_cruzamento as _cruz   # reusa _cc() e CLINI (leitura autenticada do CliniChat)
 import firebase_writer as _fw # reusa _get_db() (Firestore)
 
 _MODEL = os.environ.get("JARBAS_MODEL", "claude-sonnet-5-5")
@@ -27,7 +27,7 @@ def _cerebro():
     return _cerebro_cache
 
 def _transcript(conv_id, max_msgs=40):
-    data, err = _orf._cc("/conversation/messages/%s?from=0&to=%d&orderBy=createdAt%%3AASC&filters=%%7B%%7D" % (conv_id, max_msgs))
+    data, err = _cruz._cc("/conversation/messages/%s?from=0&to=%d&orderBy=createdAt%%3AASC&filters=%%7B%%7D" % (conv_id, max_msgs))
     if err or not data:
         return [], (err or "sem_dados")
     items = data.get("conversationItems") or []

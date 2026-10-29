@@ -114,6 +114,39 @@ def save_app_jwt(token, origem=None):
         return False
 
 
+def save_crm_map(data):
+    db = _get_db()
+    if db is None:
+        return False
+    try:
+        import time, json as _j
+        payload = _j.dumps(data, ensure_ascii=False)
+        if len(payload) > 950000:
+            payload = payload[:950000]
+        db.collection(os.environ.get("ESCUTA_CRM_COLL", "escuta_crm")).document("mapa").set(
+            {"json": payload, "atualizado_em": int(time.time())})
+        return True
+    except Exception as e:
+        print("[crmmap] erro ao guardar:", e)
+        return False
+
+
+def get_crm_map():
+    db = _get_db()
+    if db is None:
+        return None
+    try:
+        import json as _j
+        d = db.collection(os.environ.get("ESCUTA_CRM_COLL", "escuta_crm")).document("mapa").get()
+        if d.exists:
+            raw = d.to_dict().get("json")
+            if raw:
+                return _j.loads(raw)
+    except Exception as e:
+        print("[crmmap] erro leitura:", e)
+    return None
+
+
 def get_app_jwt():
     db = _get_db()
     if db is None:

@@ -247,9 +247,28 @@ def _indice_ce():
             nm = _norm_nome(cust.get("name"))
             if len(nm) >= 5 and " " in nm:
                 _OPP_NOMES[nm] = _OPP_NOMES.get(nm, False) or comprou
-    diag = {"fonte": "api_interna", "opps": len(opps), "opp_com_fone": match,
+    # Resiliencia: se a API interna falhou/veio vazia (app_jwt expirou), usa o ULTIMO mapa salvo;
+    # se veio cheia, PERSISTE o mapa (sobrevive a restart e a expiracao do token; o webhook o mantem vivo).
+    usou_mapa = False
+    if not _OPP_POR_FONE:
+        try:
+            mp = fw.get_crm_map()
+            if mp:
+                for _f, _lst in (mp.get("fones") or {}).items():
+                    _OPP_POR_FONE[_f] = _lst
+                for _f in (mp.get("comprou") or []):
+                    _COMPROU_FONE.add(_f)
+                usou_mapa = True
+        except Exception as _em:
+            print("[indice] erro ao carregar mapa salvo:", _em)
+    else:
+        try:
+            fw.save_crm_map({"fones": _OPP_POR_FONE, "comprou": list(_COMPROU_FONE)})
+        except Exception:
+            pass
+    diag = {"fonte": ("mapa_salvo" if usou_mapa else "api_interna"), "opps": len(opps), "opp_com_fone": match,
             "fones_distintos": len(_OPP_POR_FONE), "compraram_fones": len(_COMPROU_FONE),
-            "opp_nomes_n": len(_OPP_NOMES), "erro_interna": err}
+            "opp_nomes_n": len(_OPP_NOMES), "erro_interna": err, "usou_mapa_salvo": usou_mapa}
     return set(_OPP_POR_FONE.keys()), set(_COMPROU_FONE), _OPP_NOMES, len(opps), diag
 
 

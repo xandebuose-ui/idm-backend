@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# IDM - Motor de Orfaos (Bloco B). Conversa (CliniChat) e a fonte de verdade.
+# IDM - Motor de Cruzamento (Bloco B). Conversa (CliniChat) e a fonte de verdade.
 # So-leitura. PII (nome/telefone) vai SO pro Firestore trancado, nunca pro repo publico.
 import os, re, json, time, unicodedata, datetime as dt
 import urllib.request, urllib.error, urllib.parse

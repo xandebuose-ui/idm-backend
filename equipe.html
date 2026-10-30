@@ -1,0 +1,49 @@
+<!doctype html><html lang=pt-BR><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Equipe · Notas de abordagem</title>
+<style>
+:root{--bg:#f4f6f4;--card:#fff;--fg:#17201c;--mut:#5e6b64;--line:#e0e5e0;--brand:#0f5b4e;--ok:#2e8b57;--mid:#c99a2e;--bad:#c6472c}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--fg);padding:16px;max-width:1100px;margin:0 auto}
+h1{font-size:1.3rem;margin-bottom:2px}.sub{color:var(--mut);font-size:.85rem;margin-bottom:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;margin-bottom:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px}
+.nm{font-weight:700;font-size:1.05rem}.nota{font-size:2rem;font-weight:800;line-height:1.1;margin:6px 0}
+.mut{color:var(--mut);font-size:.82rem}.bar{height:8px;border-radius:5px;background:#eef2ef;margin-top:6px;overflow:hidden}.bar i{display:block;height:100%}
+h2{font-size:1rem;margin:18px 0 8px}
+table{width:100%;border-collapse:collapse;background:var(--card);border-radius:12px;overflow:hidden;font-size:.86rem}
+th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{background:#eef2ef;font-size:.75rem;text-transform:uppercase;color:var(--mut)}
+.pill{display:inline-block;padding:2px 8px;border-radius:20px;font-weight:700;font-size:.8rem;color:#fff}
+.sel{margin-bottom:10px}.sel button{border:1px solid var(--line);background:#fff;border-radius:20px;padding:6px 12px;margin-right:6px;cursor:pointer}.sel button.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+.wrap{overflow-x:auto}.trend{display:flex;gap:3px;align-items:flex-end;height:34px;margin-top:8px}.trend span{flex:1;background:#cfe3db;border-radius:3px 3px 0 0;min-height:2px}
+#msg{color:var(--mut);padding:20px 0}
+</style></head><body>
+<h1>⭐ Equipe — nota de abordagem</h1>
+<div class=sub>Nota 0 a 6 por conversa: resposta ≤15 min (horário comercial) · cidade/bairro · origem · preço em faixa + "a Avaliação define" · convite com 2 horários · retomada em 24h. Critério que não se aplica não pesa.</div>
+<div class=sel id=sel><button data-d=1>Ontem</button><button data-d=7 class=on>7 dias</button><button data-d=30>30 dias</button></div>
+<div id=msg>Carregando…</div>
+<div class=grid id=cards></div>
+<h2>📌 Cadência de hoje (leads sem próximo passo no CRM)</h2><div id=cad class=mut>—</div>
+<h2>Critérios que mais falham</h2><div class=wrap><table id=crit></table></div>
+<h2>Conversas com nota mais baixa (para conversar com a equipe)</h2><div class=wrap><table id=piores></table></div>
+<script>
+const APPMODE=!!window.IDM_APP;let _tok=null,_tokT=0,_esp=[];
+window.addEventListener('message',e=>{if(!APPMODE||e.origin!==window.IDM_ORIGIN)return;if(e.data&&e.data.t==='idm-token'){_tok=e.data.token;_tokT=Date.now();_esp.splice(0).forEach(f=>f(_tok));}});
+function pedeToken(f){return new Promise(res=>{if(!f&&_tok&&Date.now()-_tokT<40*60e3)return res(_tok);_esp.push(res);try{parent.postMessage({t:'idm-token-req'},window.IDM_ORIGIN);}catch(e){}setTimeout(()=>{const i=_esp.indexOf(res);if(i>=0){_esp.splice(i,1);res(null);}},8000);});}
+async function api(p){let t=await pedeToken(false);let r=await fetch('/api/equipe'+p,{headers:{Authorization:'Bearer '+(t||'')}});if(r.status===401){t=await pedeToken(true);r=await fetch('/api/equipe'+p,{headers:{Authorization:'Bearer '+(t||'')}});}if(!r.ok)throw new Error(r.status);return r.json();}
+const E=id=>document.getElementById(id),esc=s=>(s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const cor=n=>n>=4.5?'var(--ok)':(n>=3?'var(--mid)':'var(--bad)'),fmt=n=>n==null?'—':String(n).replace('.',',');
+const LBL={resposta_15min:'Responder em até 15 min',perguntou_cidade_bairro:'Perguntar cidade/bairro',perguntou_origem:'Perguntar como conheceu',preco_em_faixa_e_avaliacao_define:'Preço em faixa + Avaliação define',convidou_avaliacao_2_horarios:'Convite com 2 horários',retomou_lead_parado_24h:'Retomar em 24h'};
+let DIAS=7;
+async function carrega(){
+  E('msg').textContent='Carregando…';
+  try{const d=await api('?dias='+DIAS);E('msg').textContent=d.total?(d.total+' conversas avaliadas · período '+esc(d.de)+' a '+esc(d.ate)):'Ainda não há conversas avaliadas neste período.';
+    E('cards').innerHTML=(d.atendentes||[]).map(a=>'<div class=card><div class=nm>'+esc(a.atendente)+'</div><div class=nota style="color:'+cor(a.media)+'">'+fmt(a.media)+'<span class=mut> /6</span></div><div class=mut>'+a.conversas+' conversas · pior critério: <b>'+esc(LBL[a.pior]||a.pior||'—')+'</b></div><div class=bar><i style="width:'+(a.media/6*100)+'%;background:'+cor(a.media)+'"></i></div><div class=trend title="média por dia">'+(a.por_dia||[]).map(x=>'<span title="'+esc(x.dia)+': '+fmt(x.media)+'" style="height:'+Math.max(4,x.media/6*34)+'px;background:'+cor(x.media)+'"></span>').join('')+'</div></div>').join('');
+    const cr=d.criterios||[];E('crit').innerHTML='<tr><th>Critério</th>'+(d.atendentes||[]).map(a=>'<th>'+esc(a.atendente)+'</th>').join('')+'<th>Equipe</th></tr>'+cr.map(c=>'<tr><td>'+esc(LBL[c.criterio]||c.criterio)+'</td>'+(d.atendentes||[]).map(a=>{const v=(c.por||{})[a.atendente];return '<td>'+(v==null?'—':Math.round(v*100)+'%')+'</td>'}).join('')+'<td><b>'+Math.round(c.equipe*100)+'%</b></td></tr>').join('')+'<tr><td colspan=9 class=mut>% = quantas vezes o critério foi cumprido quando se aplicava</td></tr>';
+    E('piores').innerHTML='<tr><th>Lead</th><th>Atendente</th><th>Nota</th><th>Faltou</th><th>Resumo</th></tr>'+(d.piores||[]).map(p=>'<tr><td><b>'+esc(p.nome)+'</b><div class=mut>'+esc(p.dia)+'</div></td><td>'+esc(p.atendente)+'</td><td><span class=pill style="background:'+cor(p.nota)+'">'+fmt(p.nota)+'</span></td><td>'+esc((p.faltou||[]).map(k=>LBL[k]||k).join(' · '))+'</td><td class=mut>'+esc(p.resumo)+'</td></tr>').join('');
+    const c=d.cadencia||{};E('cad').innerHTML=c.por_dono?Object.entries(c.por_dono).map(([k,v])=>'<b>'+esc(k)+'</b>: '+v).join(' · ')+(c.ontem&&c.ontem.total?'<br>Ontem resolvidos: '+c.ontem.resolvidos+' de '+c.ontem.total+(c.ontem.sem_descricao?(' · '+c.ontem.sem_descricao+' com tarefa sem descrição'):''):''):'Ainda não gerada hoje.';
+  }catch(e){E('msg').textContent=String(e).includes('403')?'Só a gestão vê esta página.':'Faça login no app IDM para ver esta página.';}
+}
+document.querySelectorAll('#sel button').forEach(b=>b.onclick=()=>{document.querySelectorAll('#sel button').forEach(x=>x.classList.remove('on'));b.classList.add('on');DIAS=+b.dataset.d;carrega();});
+carrega();
+</script></body></html>

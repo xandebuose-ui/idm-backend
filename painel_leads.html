@@ -205,7 +205,12 @@ async function openLead(key,i){
       if(ce.annotation)ceHtml+='<div class=cerow>📝 '+esc(ce.annotation)+'</div>';
       ceHtml+='<div class=cefoot>Saldo de pacote não vem da API do CE — ver ficha de sessões.</div></div>';
     }
-    jb.innerHTML=ceHtml+'<div class=block><div class=t>Diagnóstico</div><p>'+esc(a.diagnostico)+'</p></div>'+
+    const fx=a.ficha||{};let notaHtml='';
+    if(fx.nota!=null){const LBL={resposta_15min:'responder em até 15 min',perguntou_cidade_bairro:'perguntar cidade/bairro',perguntou_origem:'perguntar como conheceu',preco_em_faixa_e_avaliacao_define:'passar faixa de preço + "a Avaliação define"',convidou_avaliacao_2_horarios:'convidar para a Avaliação com 2 horários',retomou_lead_parado_24h:'retomar em até 24h'};
+      const falt=Object.entries(fx.criterios||{}).filter(([k,v])=>v==='nao').map(([k])=>LBL[k]||k);
+      const cor=fx.nota>=4.5?'#2e8b57':(fx.nota>=3?'#c99a2e':'#c6472c');
+      notaHtml='<div class=cebox><div class=cet>⭐ Nota da abordagem'+(fx.atendente?' · '+esc(fx.atendente):'')+'</div><div class=cerow><b style="font-size:1.25rem;color:'+cor+'">'+String(fx.nota).replace('.',',')+'/6</b></div>'+(falt.length?'<div class=cerow>Faltou: '+esc(falt.join(' · '))+'</div>':'<div class=cerow>Nada faltou. 👏</div>')+'</div>';}
+    jb.innerHTML=ceHtml+notaHtml+'<div class=block><div class=t>Diagnóstico</div><p>'+esc(a.diagnostico)+'</p></div>'+
       '<div class=block><div class=t>Próxima condução</div><p>'+esc(a.conducao)+'</p></div>'+
       '<div class=block><div class=t>Sugestão de mensagem</div><div class=msg><span class=lab>Pronta pra enviar · método Instituto</span>'+esc(a.mensagem)+'</div><button class=cp onclick="cp()">📋 Copiar mensagem</button></div>'+
       (a.cache?'<div class=load style="text-align:left;padding:4px 0">(análise em cache)</div>':'')+

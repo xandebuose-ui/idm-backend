@@ -804,6 +804,14 @@ def painel_analise(token: str, conv_id: str, nome: str = "", temperatura: str = 
                                    "origem": identidade, "identidade": identidade, "ce": ce})
     if isinstance(r, dict):
         r["ce"] = ce
+        try:  # 30/10: nota da abordagem (ficha viva) no drawer
+            _f = _cruz._fone(telefone) if telefone else ""
+            _db = _fw._get_db()
+            _fx = (_db.collection("escuta_leads").document(_f).get().to_dict() or {}) if (_db and _f) else {}
+            r["ficha"] = {"nota": _fx.get("nota"), "criterios": _fx.get("nota_criterios"),
+                          "atendente": (_fx.get("conduta") or {}).get("atendente"), "tipo": _fx.get("tipo_contato")}
+        except Exception:
+            r["ficha"] = {}
         _tp = r.get("temperatura")
         if r.get("ok") and _tp in ("quente", "morno", "frio", "cross_sell", "operacional"):
             _TEMP_OVERRIDE[conv_id] = _tp  # leitura profunda vence; reordena no proximo ciclo
@@ -1105,3 +1113,78 @@ def pagina_fichas(token: str, f: str = "", limite: int = 80):
             "<div class=wrap><table><tr><th>Pessoa</th><th>Serviço</th><th>Cirurgia</th><th>Intenção</th><th>Abordagem</th><th>Momentos-chave</th><th>Resumo</th><th>Furos (regra)</th></tr>%s</table></div>"
             ) % (len(rows), e(f), top(cs), top(cc), top(ci), top(cn), "".join(trs))
     return HTMLResponse(page, headers={"Cache-Control": "no-store"})
+
+
+# ======================= EQUIPE: notas de abordagem (gestao) =======================
+@app.get("/app/equipe", response_class=HTMLResponse)
+def app_equipe():
+    import os as _os
+    with open(_os.path.join(_os.path.dirname(__file__), "equipe.html"), encoding="utf-8") as _f:
+        html_ = _f.read()
+    inj = '<script>window.IDM_APP=1;window.IDM_ORIGIN=%s;</script>' % json.dumps(IDM_ORIGIN)
+    html_ = html_.replace("<head>", "<head>" + inj, 1)
+    return HTMLResponse(html_, headers={"Content-Security-Policy": "frame-ancestors " + IDM_ORIGIN, "Cache-Control": "no-store"})
+
+@app.get("/api/equipe")
+def api_equipe(dias: int = 7, authorization: str = Header(default="")):
+    _uid, _p = _usuario_leads(authorization)
+    if not (_p.get("master") is True or _p.get("role") == "gestao"):
+        raise HTTPException(status_code=403, detail="so gestao")
+    import datetime as _d
+    from collections import defaultdict as _dd
+    db = _fw._get_db()
+    hoje = _sp_now().date()
+    de = (hoje - _d.timedelta(days=max(1, min(dias, 90)))).isoformat()
+    ate = (hoje - _d.timedelta(days=1)).isoformat() if dias == 1 else hoje.isoformat()
+    def dia_sp(v):
+        try:
+            x = _d.datetime.fromisoformat(str(v).replace("Z", "+00:00")[:19])
+            return (x - _d.timedelta(hours=3)).date().isoformat()
+        except Exception:
+            return None
+    rows = []
+    for d in db.collection("escuta_leads").stream():
+        l = d.to_dict() or {}
+        if l.get("nota") is None or l.get("tipo_contato") not in ("lead", "cliente"):
+            continue
+        at = ((l.get("conduta") or {}).get("atendente") or "").strip()
+        ds = dia_sp(l.get("ultima_msg_em"))
+        if not at or not ds or ds < de or ds > ate:
+            continue
+        rows.append((at.split()[0], ds, float(l["nota"]), l.get("nota_criterios") or {}, l))
+    por = _dd(list); dia = _dd(lambda: _dd(list)); crit = _dd(lambda: _dd(lambda: [0, 0]))
+    for at, ds, n, cr, l in rows:
+        por[at].append(n); dia[at][ds].append(n)
+        for k, v in cr.items():
+            if v in ("sim", "nao"):
+                c = crit[k][at]; c[1] += 1; c[0] += (v == "sim")
+    atend = []
+    for at, ns in por.items():
+        pior = None; piorv = 2
+        for k, m in crit.items():
+            if at in m and m[at][1]:
+                r = m[at][0] / m[at][1]
+                if r < piorv:
+                    piorv, pior = r, k
+        atend.append({"atendente": at, "media": round(sum(ns) / len(ns), 1), "conversas": len(ns), "pior": pior,
+                      "por_dia": [{"dia": k, "media": round(sum(v) / len(v), 1)} for k, v in sorted(dia[at].items())]})
+    atend.sort(key=lambda x: -x["conversas"])
+    criterios = []
+    for k, m in crit.items():
+        tot = sum(v[1] for v in m.values()); ok = sum(v[0] for v in m.values())
+        criterios.append({"criterio": k, "equipe": (ok / tot) if tot else 0,
+                          "por": {a: (v[0] / v[1]) for a, v in m.items() if v[1]}})
+    criterios.sort(key=lambda x: x["equipe"])
+    piores = sorted(rows, key=lambda r: r[2])[:15]
+    piores = [{"nome": r[4].get("nome") or r[4].get("fone"), "atendente": r[0], "dia": r[1], "nota": r[2],
+               "faltou": [k for k, v in r[3].items() if v == "nao"], "resumo": ((r[4].get("ia") or {}).get("resumo") or "")[:260]}
+              for r in piores]
+    cad = {}
+    try:
+        c = db.collection("escuta_cadencia").document(hoje.isoformat()).get()
+        o = db.collection("escuta_cadencia").document((hoje - _d.timedelta(days=1)).isoformat()).get()
+        cad = {"por_dono": (c.to_dict() or {}).get("por_dono") if c.exists else None,
+               "ontem": ((o.to_dict() or {}).get("conferencia") if o.exists else None)}
+    except Exception:
+        pass
+    return {"de": de, "ate": ate, "total": len(rows), "atendentes": atend, "criterios": criterios, "piores": piores, "cadencia": cad}

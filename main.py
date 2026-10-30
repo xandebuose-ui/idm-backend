@@ -830,18 +830,38 @@ import enriquecedor as _enriq
 import diario as _diario
 _coletor.registrar_extra("ficha_viva", lambda: dict(_enriq.ST))
 
+def _admin_ok(x_idm_secret: str, authorization: str) -> bool:
+    # admin = segredo do Render OU login do app com master=true (Firebase ID token)
+    if WEBHOOK_SECRET and x_idm_secret and hmac.compare_digest(x_idm_secret, WEBHOOK_SECRET):
+        return True
+    if authorization.startswith("Bearer "):
+        try:
+            _uid, _p = _usuario_leads(authorization)
+            return _p.get("master") is True
+        except HTTPException:
+            return False
+    return False
+
 @app.post("/coletor/enriquecer")
-def rota_enriquecer(modo: str = "poll", x_idm_secret: str = Header(default="")):
-    if not WEBHOOK_SECRET or not hmac.compare_digest(x_idm_secret, WEBHOOK_SECRET):
+def rota_enriquecer(modo: str = "poll", x_idm_secret: str = Header(default=""), authorization: str = Header(default="")):
+    if not _admin_ok(x_idm_secret, authorization):
         raise HTTPException(status_code=401, detail="unauthorized")
     threading.Thread(target=_enriq.rodar, args=(modo, modo != "completo", True), daemon=True).start()
     return {"ok": True, "iniciado": modo}
 
 @app.post("/diario/gerar")
-def rota_diario_gerar(d: str = "", x_idm_secret: str = Header(default="")):
-    if not WEBHOOK_SECRET or not hmac.compare_digest(x_idm_secret, WEBHOOK_SECRET):
+def rota_diario_gerar(d: str = "", x_idm_secret: str = Header(default=""), authorization: str = Header(default="")):
+    if not _admin_ok(x_idm_secret, authorization):
         raise HTTPException(status_code=401, detail="unauthorized")
     return _diario.gerar(d or None)
+
+@app.get("/api/diario")
+def api_diario(d: str = "", authorization: str = Header(default="")):
+    # leitura do diario pelo app (gestao/master)
+    _uid, _p = _usuario_leads(authorization)
+    if not (_p.get("master") is True or _p.get("role") == "gestao"):
+        raise HTTPException(status_code=403, detail="so gestao")
+    return _diario.ler(d or None) or {"vazio": True}
 
 @app.get("/p/{token}/diario", response_class=HTMLResponse)
 def pagina_diario(token: str, d: str = ""):

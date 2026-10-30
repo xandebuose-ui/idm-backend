@@ -821,7 +821,7 @@ def _rodar_termometro(motivo="poll"):
                 _prob = "Agendado, mas a etapa do CRM está desatualizada (%s)" % (pp.get("etapa") or "?")
             elif ident != "cliente" and sit == "sem_opp":
                 _h1 = _dias_desde(fx.get("primeira_chegada"))
-                if _h1 is not None and _h1 * 24 >= 2:
+                if _h1 is not None and 2 <= _h1 * 24 and _h1 <= 7:      # lead NOVO: chegou ha 2h a 7 dias
                     _prob = "Lead sem oportunidade no CRM há %s" % (("%d h" % int(_h1 * 24)) if _h1 < 2 else ("%d dias" % int(_h1)))
             if alerta:
                 _prob = "Marcado como feito há mais de 24h e o CRM segue sem próximo passo"

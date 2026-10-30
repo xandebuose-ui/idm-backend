@@ -173,9 +173,48 @@ def proximo_passo(fone_raw):
                     atualizar_etapa=bool(vivas) and not (etapa or "").lower().startswith("agend"))
     if futuras:
         return dict(base, ok=True, tipo="tarefa", quando=futuras[0])
+    if vivas and (etapa or "").lower().startswith("agend"):
+        # etapa diz Agendamento, mas nao ha horario na agenda (60 dias): dado errado no CRM
+        return dict(base, ok=False, tipo="agendamento_sem_agenda", quando=(vencidas[-1] if vencidas else None))
     if vencidas:
         return dict(base, ok=False, tipo="vencida", quando=vencidas[-1])
     return dict(base, ok=False, tipo=("sem_data" if tarefas else "nenhum"), quando=None)
+
+
+_CONFIRMA = re.compile(
+    r"^[\s\W]*((ok+|okay|obrigad[ao]s?|muito obrigad[ao]|obg|brigad[ao]|blz|beleza|t[aá]( bom)?|certo|perfeito|combinado|"
+    r"combinad[ií]ssimo|show|tudo bem|de nada|igualmente|am[eé]m|boa noite|bom dia|boa tarde|valeu|vlw|tchau|"
+    r"at[eé] (mais|logo|amanh[aã]|l[aá]|segunda|ter[cç]a|quarta|quinta|sexta|s[aá]bado)|confirmad[oa]s?|confirmo|"
+    r"fechado|entendi|anotado|estarei a[ií]|estarei l[aá]|pode deixar|maravilha|[oó]timo|agrade[cç]o|"
+    r"[\U0001F44D\U0001F64F\u2764\uFE0F\U0001F60A\U0001F970\U0001F618\U0001F44F\U0001F917\U0001F49A\U0001F49C\U0001F499\U0001F60D\U0001F642\U0001F604]+)"
+    r"[\s!.,;\W]*)+$", re.I)
+_ULT_CACHE = {}
+
+def ultima_do_lead(conv_id, lt):
+    """Quando a ultima mensagem e do lead: ela pede resposta? Nao pede se for so confirmacao/agradecimento
+    ou se a equipe reagiu com emoji a ela. Cache por (conversa, data da ultima msg)."""
+    k = (str(conv_id), lt or "")
+    if k in _ULT_CACHE:
+        return _ULT_CACHE[k]
+    data, err = _cc("/conversation/messages/%s?from=0&to=8&orderBy=createdAt%%3ADESC&filters=%%7B%%7D" % conv_id)
+    if err or not data:
+        return None
+    its = [m for m in (data.get("conversationItems") or []) if m.get("senderType") in ("contacts", "users")]
+    its.sort(key=lambda m: str(m.get("date") or m.get("createdAt") or ""), reverse=True)
+    if not its:
+        return None
+    m = its[0]
+    txt = str(m.get("content") or "").strip()
+    reacoes = m.get("reactions") or []
+    reagida = any(isinstance(r, dict) and str(r.get("senderType") or r.get("sender_type") or "users").lower() != "contacts"
+                  for r in reacoes) or (bool(reacoes) and not any(isinstance(r, dict) for r in reacoes))
+    out = {"de": "lead" if m.get("senderType") == "contacts" else "equipe", "reagida": bool(reagida),
+           "confirmacao": bool(txt) and len(txt) <= 120 and "?" not in txt and bool(_CONFIRMA.match(txt)),
+           "tipo": m.get("type"), "n_reacoes": len(reacoes)}
+    if len(_ULT_CACHE) > 3000:
+        _ULT_CACHE.clear()
+    _ULT_CACHE[k] = out
+    return out
 
 
 def _primeira_msg(conv_id):

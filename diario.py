@@ -121,11 +121,11 @@ def gerar(dia=None, gravar=True):
 
     c = (term.get("contagem") or {})
     L = []
-    L.append("*IDM · Diário comercial — %s %s*" % (DIAS_PT[dd.weekday()], dd.strftime("%d/%m")))
-    L.append("_prévia — gerado %s_" % _sp_now().strftime("%d/%m %H:%M"))
+    L.append("*IDM · Diário comercial · %s %s*" % (DIAS_PT[dd.weekday()], dd.strftime("%d/%m")))
+    L.append("_gerado %s_" % _sp_now().strftime("%d/%m %H:%M"))
     L.append("")
     L.append("*📥 Chegadas:* %d conversas novas" % len(cheg))
-    L.append("• Leads: *%d*" % len(novos) + ("" if not novos else " — " + " · ".join("%s: %d" % (o, n) for o, n in por_origem.most_common())))
+    L.append("• Leads: *%d*" % len(novos) + ("" if not novos else ": " + " · ".join("%s: %d" % (o, n) for o, n in por_origem.most_common())))
     L.append("• Clientes que voltaram a falar: %d" % len(clientes))
     if meta:
         L.append("*📣 Meta Ads (%s):* gasto %s · conversas iniciadas %d" % (dd.strftime("%d/%m"), _brl_reais(gasto), conv_meta) +
@@ -137,19 +137,27 @@ def gerar(dia=None, gravar=True):
              " · movimentadas: %d" % len(mexidas))
     L.append("*🧾 Orçamentos:* %d gerados (%s) · *vendas: %d (%s)*" % (len(orc_d), _brl(sum(int(v.get("valor_centavos") or 0) for v in orc_d)),
              len(ganhos_d), _brl(sum(int(v.get("valor_centavos") or 0) for v in ganhos_d))) +
-             ("" if not itens else " — " + ", ".join("%s x%d" % (i, n) for i, n in itens.most_common(4))))
+             ("" if not itens else ": " + ", ".join("%s x%d" % (i, n) for i, n in itens.most_common(4))))
     L.append("")
+    _at = list(term.get("atencao") or [])
+    if _at:
+        L.append("*🚨 Atenção agora (%d)*" % len(_at))
+        for _a in _at[:8]:
+            L.append("• %s: %s (%s)" % ((_a.get("nome") or "?").strip(), _a.get("problema"), str(_a.get("dono") or "sem dono").split()[0]))
+        if len(_at) > 8:
+            L.append("• e mais %d no Painel de Leads" % (len(_at) - 8))
+        L.append("")
     L.append("*🚨 Furos para cobrar hoje*")
-    L.append("• Leads esperando resposta (até 48h — agir hoje): *%d*" % len(sem_resp) + (" — " + nomes(sem_resp, 6, True) if sem_resp else ""))
+    L.append("• Leads esperando resposta (até 48h, agir hoje): *%d*" % len(sem_resp) + (": " + nomes(sem_resp, 6, True) if sem_resp else ""))
     if sem_resp_velhos:
         L.append("• Leads sem resposta há mais de 48h (esfriando): %d" % len(sem_resp_velhos))
     if sem_resp_cli:
         L.append("• Clientes esperando resposta: %d" % len(sem_resp_cli))
-    L.append("• Leads novos de ontem sem oportunidade no CRM: *%d*" % len(sem_opp) + (" — " + nomes(sem_opp) if sem_opp else ""))
+    L.append("• Leads novos de ontem sem oportunidade no CRM: *%d*" % len(sem_opp) + (": " + nomes(sem_opp) if sem_opp else ""))
     cid_d = [l for l in cidade if l.get("data_chegada_sp") == d]
     ori_d = [l for l in origem_np if l.get("data_chegada_sp") == d]
     L.append("• Nas chegadas de ontem: cidade/bairro não perguntados %d · origem não perguntada %d" % (len(cid_d), len(ori_d)))
-    L.append("• Leads em andamento SEM próximo passo (tarefa com data ou agendamento): *%d*" % len(sem_tarefa) + (" — " + nomes(sem_tarefa, 6) if sem_tarefa else ""))
+    L.append("• Leads em andamento SEM próximo passo (tarefa com data ou agendamento): *%d*" % len(sem_tarefa) + (": " + nomes(sem_tarefa, 6) if sem_tarefa else ""))
     L.append("• Base ativa: cidade não perguntada %d · origem não perguntada %d" % (len(cidade), len(origem_np)))
     _cad_hoje = {}
     try:
@@ -158,7 +166,7 @@ def gerar(dia=None, gravar=True):
         _co = db.collection("escuta_cadencia").document(d).get()
         if _cd.exists or _co.exists:
             L.append("")
-            L.append("*📌 Cadência — leads sem próximo passo no CRM*")
+            L.append("*📌 Cadência: leads sem próximo passo no CRM*")
             if _cd.exists:
                 _pd = (_cd.to_dict() or {}).get("por_dono") or {}
                 _cad_hoje.update(_pd)
@@ -179,12 +187,12 @@ def gerar(dia=None, gravar=True):
         L.append("• 1ª resposta (mediana ontem): %d min · %d acima de 1h" % (int(t1_med), lentos))
     if notas:
         L.append("")
-        L.append("*⭐ Nota de abordagem (0 a 6) — conversas de ontem*")
+        L.append("*⭐ Nota de abordagem (0 a 6), conversas de ontem*")
         L.append("• " + " · ".join("%s %s (%d)" % (a, str(n).replace(".", ","), q) for a, n, q in notas[:6]))
     L.append("")
     if c:
         L.append("*🌡️ Termômetro agora:* 🔥 %d · 🌤️ %d · ❄️ %d · 💰 %d cross-sell" % (c.get("quente", 0), c.get("morno", 0), c.get("frio", 0), c.get("cross_sell", 0)))
-    L.append("— Saúde: " + ("✅ todas as fontes OK" if not alertas else "⚠️ " + " | ".join(alertas[:3])))
+    L.append("Saúde: " + ("✅ todas as fontes OK" if not alertas else "⚠️ " + " | ".join(alertas[:3])))
     L.append("")
     L.append("_Responda *ok* para manter este canal aberto._")
     texto = "\n".join(L)
@@ -199,7 +207,8 @@ def gerar(dia=None, gravar=True):
              # 30/10: campos para a IMAGEM do diario
              "sem_tarefa_nomes": nomes(sem_tarefa, 5) if sem_tarefa else "", "sem_resposta_nomes": nomes(sem_resp, 3, True) if sem_resp else "",
              "sem_resposta_clientes": len(sem_resp_cli), "termometro": dict(c), "termometro_pendentes": dict(term.get("pendentes") or {}),
-             "cadencia_hoje": dict(_cad_hoje)}
+             "cadencia_hoje": dict(_cad_hoje),
+             "atencao": [{"nome": a.get("nome"), "problema": a.get("problema")} for a in (term.get("atencao") or [])][:8]}
     if gravar:
         db.collection(COLL).document(d).set({"dia": d, "texto": texto, "dados": dados, "status": "previa",
                                              "gerado_em": _sp_now().isoformat(timespec="seconds")})
@@ -400,12 +409,38 @@ def enviar_imagem(png, fone=None, legenda=""):
         up = up["data"]
     if not (isinstance(up, dict) and up.get("url")):
         ENVIO_IMG.update({"erro": "upload sem url: %s" % str(up)[:200]}); return dict(ENVIO_IMG)
+    # passo 2 (igual ao app): avisa o CE dos arquivos que vao para o chat
+    ENVIO_IMG["etapa"] = "handle-files"
+    try:
+        rq2 = _ur.Request(_cruz.INTERNAL + "/api/clini-chat/handle-files", method="POST",
+                          data=json.dumps({"file_ids": [up.get("id")]}).encode(), headers={
+                              "Authorization": "Bearer " + app, "User-Agent": UA, "Accept": "application/json",
+                              "Content-Type": "application/json"})
+        with _ur.urlopen(rq2, timeout=40) as resp2:
+            ENVIO_IMG["handle_files"] = resp2.status
+    except _ue.HTTPError as e:
+        ENVIO_IMG["handle_files"] = "http %s" % e.code
+    except Exception as e:
+        ENVIO_IMG["handle_files"] = repr(e)[:80]
+    # passo 3 (igual ao app): message/send em multipart COM o arquivo + os campos da mensagem
     ENVIO_IMG["etapa"] = "send"
-    body = {"type": "image", "content": legenda or "", "contactChannelId": cid, "senderType": "users",
-            "senderId": uid, "status": "pending", "fileData": up.get("url"),
-            "filePath": "buckets/%s/%s.%s" % (up.get("path"), up.get("key"), up.get("extension") or "png"),
-            "fileMeta": json.dumps(up, ensure_ascii=False, default=str)}
-    st, resp = _req("POST", "/message/send", tok, body)
+    campos2 = {"type": "image", "content": legenda or "", "contactChannelId": cid, "senderType": "users",
+               "senderId": uid, "status": "pending", "fileData": up.get("url"),
+               "filePath": "buckets/%s/%s.%s" % (up.get("path"), up.get("key"), up.get("extension") or "png"),
+               "fileMeta": json.dumps(up, ensure_ascii=False, default=str)}
+    b2, corpo2 = _multipart(campos2, nome, png, "image/png")
+    rq3 = _ur.Request(CLINI + "/message/send", data=corpo2, method="POST", headers={
+        "Authorization": "Bearer " + tok, "User-Agent": UA, "Accept": "application/json",
+        "Content-Type": "multipart/form-data; boundary=" + b2})
+    try:
+        with _ur.urlopen(rq3, timeout=60) as resp3:
+            st = resp3.status
+            txt3 = resp3.read().decode("utf-8", "ignore")
+            resp = json.loads(txt3) if txt3.strip() else None
+    except _ue.HTTPError as e:
+        st, resp = e.code, e.read().decode("utf-8", "ignore")[:300]
+    ENVIO_IMG["resposta"] = (str([{k: (it.get(k) if isinstance(it, dict) else None) for k in ("type", "status", "errorMessage", "fileData")}
+                                  for it in (resp if isinstance(resp, list) else [resp])])[:400])
     ok = st in (200, 201)
     erro = None if ok else "send http %s: %s" % (st, str(resp)[:200])
     if ok:
@@ -432,7 +467,7 @@ def gerar_e_enviar():
                 ei = enviar_imagem(imagem(r))
             except Exception as _ex:
                 ei = {"ok": False, "erro": "imagem: %s" % repr(_ex)[:160]}
-        e = enviar(r["texto"].replace("_prévia — gerado", "_gerado"))
+        e = enviar(r["texto"])
         e = dict(e, imagem=ei)
         try:
             db = _fw._get_db()

@@ -89,6 +89,19 @@ def render(dados, dia_iso, gerado_txt=""):
             d.text((x + 22, y + 118 + j * 22), ln, font=_font("r", 18), fill=MUT)
     y += 170 + 18
 
+    # atencao agora (dado errado / risco de perder o lead)
+    at = dados.get("atencao") or []
+    if at:
+        linhas = []
+        for a in at[:6]:
+            linhas += _wrap(d, "%s: %s" % ((a.get("nome") or "?").strip(), a.get("problema") or ""), _font("r", 22), W - 2 * PAD - 80)[:2]
+        h = 80 + 30 * len(linhas) + 10
+        d.rounded_rectangle([PAD, y, W - PAD, y + h], radius=22, fill=SOFT["bad"])
+        d.text((PAD + 30, y + 24), "Atenção agora (%d)" % len(at), font=_font("b", 27), fill=BAD)
+        for j, ln in enumerate(linhas):
+            d.text((PAD + 30, y + 72 + j * 30), ln, font=_font("r", 22), fill=FG)
+        y += h + 18
+
     # furos
     furos = [("Leads SEM próximo passo no CRM", dados.get("sem_tarefa", 0), dados.get("sem_tarefa_nomes") or "", BAD),
              ("Leads esperando resposta (agir hoje)", dados.get("sem_resposta", 0), dados.get("sem_resposta_nomes") or "", MID),

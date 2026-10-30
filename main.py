@@ -509,11 +509,8 @@ def _sp_now():
     return dt.datetime.utcnow() - dt.timedelta(hours=3)
 
 def _rodar_cruzamento(motivo="poll"):
-    if motivo == "poll":
-        n = _sp_now()
-        mins = n.hour * 60 + n.minute
-        if mins < 510 or mins > 1200:
-            return {"ok": True, "skip": "fora do horario comercial"}
+    if motivo == "poll" and _sp_now().hour < 6:       # 30/10: roda 06h00-23h59
+        return {"ok": True, "skip": "pausa 00h-06h"}
     if not _cruz_lock.acquire(blocking=False):
         return {"ok": True, "skip": "ja rodando"}
     try:
@@ -598,7 +595,8 @@ _TERM_MEM = {"sujo": False, "carregado": False}
 def _salvar_memoria_termometro(db):
     # 30/10: memoria do termometro no banco -> reinicio/deploy NAO zera mais; so reclassifica mudanca/novo.
     try:
-        itens = {str(cid): {"lt": v[0][0], "ident": v[0][1], "cls": v[1]} for cid, v in _TERM_CACHE.items()}
+        itens = {str(cid): {"lt": v[0][0], "ident": v[0][1], "ver": (v[0][2] if len(v[0]) > 2 else ""), "cls": v[1]}
+                 for cid, v in _TERM_CACHE.items()}
         db.collection(os.environ.get("TERM_COLL", "escuta_termometro")).document("memoria").set(
             {"itens": itens, "override": {str(k): v for k, v in _TEMP_OVERRIDE.items()},
              "salvo_em": _sp_now().isoformat(timespec="seconds")})
@@ -615,7 +613,7 @@ def _carregar_memoria_termometro(db):
         n = 0
         for cid, it in (v.get("itens") or {}).items():
             if cid not in _TERM_CACHE and isinstance(it, dict) and it.get("cls"):
-                _TERM_CACHE[cid] = ((it.get("lt") or "", it.get("ident") or "novo"), it["cls"])
+                _TERM_CACHE[cid] = ((it.get("lt") or "", it.get("ident") or "novo", it.get("ver") or ""), it["cls"])
                 n += 1
         for cid, t in (v.get("override") or {}).items():
             _TEMP_OVERRIDE.setdefault(cid, t)
@@ -636,6 +634,7 @@ def _fonte_de_leads():
     aplicar_gate = (modo != "dedicado")
     return convs, aplicar_gate
 
+TERM_CRITERIO = "v2"     # 30/10: criterio de temperatura v2 aprovado pelo Xandao (mudar a versao reclassifica todos)
 TERM_DIAS_QUENTE = int(os.environ.get("TERM_DIAS_QUENTE", "3"))
 TERM_DIAS_MORNO = int(os.environ.get("TERM_DIAS_MORNO", "10"))
 _FICHAS_T = {"t": 0.0, "d": {}}
@@ -652,7 +651,13 @@ def _fichas_termometro(ttl=300):
             for d in db.collection("escuta_leads").stream():
                 x = d.to_dict() or {}
                 out[d.id] = {"tipo": x.get("tipo_contato"), "interno": x.get("interno"), "esperando": x.get("esperando"),
-                             "ultima_msg_de": x.get("ultima_msg_de"), "ultima_msg_em": x.get("ultima_msg_em")}
+                             "ultima_msg_de": x.get("ultima_msg_de"), "ultima_msg_em": x.get("ultima_msg_em"),
+                             "primeira_chegada": x.get("primeira_chegada"),
+                             "dono": ((x.get("crm") or {}).get("vendedor") or (x.get("conduta") or {}).get("atendente"))}
+            for d in db.collection("escuta_tipo_manual").stream():      # 30/10: botao "Nao e lead" vence a IA
+                m = d.to_dict() or {}
+                if m.get("tipo"):
+                    out.setdefault(d.id, {})["tipo"] = m["tipo"]
         _FICHAS_T.update({"t": _tm.time(), "d": out})
     except Exception as e:
         print("[termometro] fichas erro:", repr(e)[:100], flush=True)
@@ -679,10 +684,8 @@ def _dm(iso, hora=False):
 
 def _rodar_termometro(motivo="poll"):
     import time as _t
-    if motivo == "poll":
-        n = _sp_now(); mins = n.hour * 60 + n.minute
-        if mins < 510 or mins > 1200:
-            return {"ok": True, "skip": "fora do horario comercial"}
+    if motivo == "poll" and _sp_now().hour < 6:       # 30/10: roda 06h00-23h59
+        return {"ok": True, "skip": "pausa 00h-06h"}
     if not _term_lock.acquire(blocking=False):
         return {"ok": True, "skip": "ja rodando"}
     try:
@@ -696,6 +699,7 @@ def _rodar_termometro(motivo="poll"):
                   "operacional": [], "revisar": [], "pendente": [], "agendado": []}
         fichas = _fichas_termometro()
         fora = {}
+        atencao = []
         feitas = 0
         tratados = {}
         try:
@@ -718,7 +722,7 @@ def _rodar_termometro(motivo="poll"):
                 continue  # Perdido/Desqualificado -> Reativacao (depois)
             vazamento = bool(ident != "cliente" and sit == "sem_opp")
             nome = L.get("nome"); fone_raw = L.get("telefone"); lt = L.get("lt") or ""
-            chave = (lt, ident)
+            chave = (lt, ident, TERM_CRITERIO)
             cache = _TERM_CACHE.get(cid)
             if cache and cache[0] == chave:
                 cls = cache[1]
@@ -764,6 +768,14 @@ def _rodar_termometro(motivo="poll"):
                 t = "agendado"          # ja converteu o passo: sai do funil de temperatura
             de = L.get("de") or fx.get("ultima_msg_de")
             esperando = (de == "lead") and not (fx.get("esperando") == "encerrada" and (fx.get("ultima_msg_em") or "")[:16] >= (lt or "")[:16])
+            if esperando:
+                # 30/10: confirmacao/agradecimento do lead ou reacao (emoji) da equipe = respondido
+                try:
+                    _u = _cruz.ultima_do_lead(cid, lt)
+                except Exception:
+                    _u = None
+                if _u and (_u.get("confirmacao") or _u.get("reagida") or _u.get("de") == "equipe"):
+                    esperando = False
             if ident == "cliente" or t == "agendado":
                 em_dia = not esperando
             else:
@@ -772,6 +784,8 @@ def _rodar_termometro(motivo="poll"):
                 pend = "Lead esperando resposta"
             elif ident != "cliente" and sit == "sem_opp":
                 pend = "Sem oportunidade no CRM"
+            elif ident != "cliente" and pp.get("tipo") == "agendamento_sem_agenda":
+                pend = "Etapa Agendamento sem horário na agenda"
             elif ident != "cliente" and pp.get("tipo") == "vencida":
                 pend = "Tarefa vencida em " + _dm(pp.get("quando"))
             elif ident != "cliente" and not pp.get("ok"):
@@ -799,6 +813,21 @@ def _rodar_termometro(motivo="poll"):
                 elif mins >= 1440:
                     alerta = "marcado sem acao"
                     alertas.append({"conv": cid, "nome": nome, "marcado_em": tr.get("marcado_em")})
+            # 30/10: quadro "Atencao agora" (dado errado ou risco de perder o lead)
+            _prob = None
+            if ident != "cliente" and pp.get("tipo") == "agendamento_sem_agenda":
+                _prob = "Etapa Agendamento sem horário na agenda"
+            elif ident != "cliente" and pp.get("tipo") == "agendamento" and pp.get("atualizar_etapa"):
+                _prob = "Agendado, mas a etapa do CRM está desatualizada (%s)" % (pp.get("etapa") or "?")
+            elif ident != "cliente" and sit == "sem_opp":
+                _h1 = _dias_desde(fx.get("primeira_chegada"))
+                if _h1 is not None and _h1 * 24 >= 2:
+                    _prob = "Lead sem oportunidade no CRM há %s" % (("%d h" % int(_h1 * 24)) if _h1 < 2 else ("%d dias" % int(_h1)))
+            if alerta:
+                _prob = "Marcado como feito há mais de 24h e o CRM segue sem próximo passo"
+            if _prob:
+                atencao.append({"conv": cid, "nome": nome, "telefone": fone_raw, "grupo": t, "problema": _prob,
+                                "dono": fx.get("dono") or "sem dono"})
             baldes[t].append({"conv": cid, "nome": nome, "telefone": fone_raw, "lt": lt, "dias": dias,
                               "identidade": ident, "motivo": cls.get("motivo", ""),
                               "alerta": alerta, "vazamento": vazamento,
@@ -833,7 +862,7 @@ def _rodar_termometro(motivo="poll"):
                "funil": funil, "contagem": contagem, "entrada": entrada,
                "vazamento_total": sum(1 for _b in ("quente", "morno", "frio", "cross_sell")
                                       for _l in baldes[_b] if _l.get("vazamento")),
-               "alertas": alertas, "pendentes": pendentes, "fora_do_termometro": fora,
+               "alertas": alertas, "pendentes": pendentes, "fora_do_termometro": fora, "atencao": atencao,
                "regras": {"quente_ate_dias": TERM_DIAS_QUENTE, "morno_ate_dias": TERM_DIAS_MORNO},
                "agenda": {"n": _cruz._AGENDA.get("n"), "erro": _cruz._AGENDA.get("erro")}, **baldes}
         _TERM["result"] = res; _TERM["quando"] = res["gerado_em"]
@@ -1207,9 +1236,36 @@ def app_leads():
 
 @app.get("/api/leads/termometro.json")
 def api_leads_termometro(authorization: str = Header(default="")):
-    _usuario_leads(authorization)
+    _uid, _p = _usuario_leads(authorization)
     _maybe_tick()
-    return {"ok": True, "quando": _TERM["quando"], "result": _TERM["result"]}
+    return {"ok": True, "quando": _TERM["quando"], "result": _TERM["result"],
+            "eu": {"gestao": bool(_p.get("master") is True or _p.get("role") == "gestao")}}
+
+_TIPOS_FORA = {"fornecedor_parceiro": "Fornecedor / parceiro", "equipe_interna": "Equipe", "teste_interno": "Teste", "spam": "Spam"}
+
+@app.post("/api/leads/tipo")
+def api_leads_tipo(telefone: str, tipo: str, authorization: str = Header(default="")):
+    """Botao 'Nao e lead' (so gestao/master): marca o contato como fornecedor/equipe/teste/spam.
+    tipo=lead desfaz. Sai do termometro, da cadencia e do Diario; a IA nao sobrescreve."""
+    uid, perfil = _usuario_leads(authorization)
+    if not (perfil.get("master") is True or perfil.get("role") == "gestao"):
+        raise HTTPException(status_code=403, detail="so a gestao")
+    if tipo not in _TIPOS_FORA and tipo != "lead":
+        raise HTTPException(status_code=400, detail="tipo invalido")
+    fk = _cruz._fone(telefone)
+    if not fk:
+        raise HTTPException(status_code=400, detail="telefone invalido")
+    db = _fw._get_db()
+    ref = db.collection("escuta_tipo_manual").document(fk)
+    if tipo == "lead":
+        ref.delete()
+        db.collection("escuta_leads").document(fk).set({"tipo_manual": False}, merge=True)
+    else:
+        ref.set({"tipo": tipo, "por_uid": uid, "por_nome": perfil.get("name"), "em": _sp_now().isoformat(timespec="seconds")})
+        db.collection("escuta_leads").document(fk).set({"tipo_contato": tipo, "tipo_manual": True}, merge=True)
+    _FICHAS_T["t"] = 0.0     # invalida o cache: o termometro aplica na proxima passada
+    threading.Thread(target=lambda: _rodar_termometro("tipo"), daemon=True).start()
+    return {"ok": True, "fone": fk, "tipo": tipo}
 
 @app.get("/api/leads/analise")
 def api_leads_analise(conv_id: str, nome: str = "", temperatura: str = "", identidade: str = "",
@@ -1384,6 +1440,14 @@ def admin_proximo_passo(fone: str = "", x_idm_secret: str = Header(default=""), 
     if f:
         out["fone"] = f
         out["proximo_passo"] = _cruz.proximo_passo(f)
+        try:
+            for _u in ((_last_cruz.get("result") or {}).get("universo") or []):
+                if _cruz._fone(_u.get("telefone")) == f:
+                    out["ultima_msg"] = _cruz.ultima_do_lead(_u.get("conv"), _u.get("lt"))
+                    out["universo_item"] = {k: _u.get(k) for k in ("conv", "lt", "de", "identidade", "situacao")}
+                    break
+        except Exception as _e:
+            out["ultima_msg_erro"] = repr(_e)[:120]
         out["opps_indice"] = _cruz._OPP_POR_FONE.get(f)
         try:
             db = _fw._get_db()
@@ -1436,4 +1500,4 @@ def rota_diario_teste_imagem(dia: str = "", authorization: str = Header(default=
     r = _diario.gerar(dia or None, gravar=False)
     if not r.get("ok"):
         return r
-    return _diario.enviar_imagem(_diario.imagem(r), legenda="Diário comercial — teste da versão em imagem")
+    return _diario.enviar_imagem(_diario.imagem(r), legenda="Diário comercial, teste da versão em imagem")

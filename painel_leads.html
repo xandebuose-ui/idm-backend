@@ -55,6 +55,12 @@ position:relative;overflow:hidden;display:flex;flex-direction:column;gap:9px;cur
 details.emdia>summary{cursor:pointer;font-size:.8rem;color:var(--muted);font-weight:700;margin:14px 2px 6px;list-style:none}
 details.emdia>summary::before{content:"▸ "}details.emdia[open]>summary::before{content:"▾ "}
 .mcard.ag .mnum{color:#2e8b57}
+.atn{border:1px solid var(--hot);background:var(--hot-soft);border-radius:var(--r);padding:12px 14px;margin:14px 0 4px}
+.atn h3{margin:0 0 8px;font-size:1rem;color:var(--hot)}
+.atn button{display:flex;gap:10px;align-items:baseline;width:100%;text-align:left;background:none;border:0;border-top:1px solid rgba(0,0,0,.08);padding:8px 2px;font:inherit;color:inherit;cursor:pointer}
+.atn button:first-of-type{border-top:0}.atn b{white-space:nowrap}.atn .pb{flex:1}.atn .dn{font-size:.75rem;color:var(--muted);white-space:nowrap}
+.nlead{margin-top:14px;padding:10px 12px;border:1px dashed var(--line);border-radius:10px;font-size:.8rem;color:var(--muted)}
+.nlead button{margin:6px 6px 0 0;padding:6px 10px;border-radius:16px;border:1px solid var(--line);background:var(--surface);color:var(--fg);font:inherit;cursor:pointer}
 .ppbox{margin-top:8px;padding:8px 10px;border-radius:10px;font-size:.82rem;font-weight:600}
 .ppbox.bad{background:var(--hot-soft);color:var(--hot)}.ppbox.ok{background:#e3f2ea;color:#2e8b57}
 @media(max-width:720px){.fora{grid-template-columns:1fr}}
@@ -114,6 +120,7 @@ footer{margin:28px 0 14px;font-size:.76rem;color:var(--muted);text-align:center}
 </div></header>
 <div class="wrap">
   <div id="alertas"></div>
+  <div id="atencao"></div>
   <section>
     <div class="sec-head"><h2>Termômetro de leads</h2><span class="hint">clique num grupo pra ver quem está nele e a análise do Jarbas</span></div>
     <div class="therm">
@@ -124,7 +131,7 @@ footer{margin:28px 0 14px;font-size:.76rem;color:var(--muted);text-align:center}
     </div>
     <div class="fora">
       <button class="mcard op" onclick="openGroup('operacional')"><div class="mnum" id="n_op">—</div><div class="ml"><b>⚙️ Operacional · fora do funil</b><br>Cliente tratando logística do que já tem (vai pra frente de pacotes ativos).</div></button>
-      <button class="mcard ag" onclick="openGroup('agendado')"><div class="mnum" id="n_ag">—</div><div class="ml"><b>📅 Agendados · fora do funil</b><br>Lead com agendamento futuro. Só cobra se a etapa do CRM estiver desatualizada.</div></button>
+      <button class="mcard ag" onclick="openGroup('agendado')"><div class="mnum" id="n_ag">—</div><div class="ml"><b>📅 Agendados · já marcaram</b><br>Lead com horário na agenda. Saem da temperatura; só cobra se a etapa do CRM estiver errada.</div></button>
       <button class="mcard rev" onclick="openGroup('revisar')"><div class="mnum" id="n_rev">—</div><div class="ml"><b>🔁 Revisar</b><br>Classificação a refazer — reclassifica sozinho no próximo ciclo.</div></button>
     </div>
     <section style="margin-top:20px"><div class="sec-head"><h2>Entrada de leads</h2><span class="hint">visão geral — detalhe completo na aba Marketing</span></div><div id="entrada"></div></section>
@@ -163,12 +170,14 @@ const E=id=>document.getElementById(id);
 const esc=s=>(s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const LABEL={quente:'🔥 Quente',morno:'🌤️ Morno',frio:'❄️ Frio',cross_sell:'💰 Cross-sell',operacional:'⚙️ Operacional',revisar:'🔁 Revisar',agendado:'📅 Agendados'};
 const GRUPOS=['quente','morno','frio','cross_sell','operacional','agendado','revisar','pendente'];
-let DATA={},VIEW={};
+let DATA={},VIEW={},EU={};
 function acha(conv){for(const g of GRUPOS){const a=DATA[g]||[];for(const l of a){if(String(l.conv)===String(conv))return [g,l];}}return [null,null];}
 async function carrega(){
   try{
     const r=await api('/termometro.json',{cache:'no-store'}).then(r=>r.json());
-    const x=r.result||{};DATA=x;const c=x.contagem||{};
+    const x=r.result||{};DATA=x;EU=r.eu||{};const c=x.contagem||{};
+    const at=x.atencao||[];
+    E('atencao').innerHTML=at.length?('<div class=atn><h3>🚨 Atenção agora ('+at.length+')</h3>'+at.map(a=>'<button onclick="openLead(\''+a.grupo+'\',\''+esc(a.conv)+'\')"><b>'+esc(a.nome||'(sem nome)')+'</b><span class=pb>'+esc(a.problema)+'</span><span class=dn>'+esc(String(a.dono||'sem dono').split(' ')[0])+'</span></button>').join('')+'</div>'):'';
     E('n_quente').textContent=c.quente||0;E('n_morno').textContent=c.morno||0;E('n_frio').textContent=c.frio||0;E('n_cross').textContent=c.cross_sell||0;
     E('n_op').textContent=c.operacional||0;E('n_rev').textContent=c.revisar||0;E('n_ag').textContent=c.agendado||0;
     const pd=x.pendentes||{};[['quente','quente'],['morno','morno'],['frio','frio'],['cross','cross_sell']].forEach(([id,k])=>{const n=pd[k]||0;E('p_'+id).textContent=n?('⚠ '+n+' precisa'+(n>1?'m':'')+' de ação'):'✓ todos em dia';E('p_'+id).style.color=n?'':'#2e8b57';});
@@ -200,7 +209,7 @@ function openGroup(key,refresh){
   const abertoAntes=!!document.querySelector('details.emdia[open]');
   let h='<div style="font-size:.78rem;color:var(--muted);margin-bottom:4px">Em cima: quem precisa de ação. Embaixo: quem já tem próximo passo (tarefa com data ou agendamento) — não some, só desce.</div>';
   h+='<div class=grp>Precisa de ação — '+pend.length+'</div><div class=llist>'+(pend.length?pend.map(l=>item(key,l)).join(''):'<div class=load>Ninguém pendente aqui. 👏</div>')+'</div>';
-  if(ok.length)h+='<details class=emdia'+((refresh&&abertoAntes)?' open':'')+'><summary>✓ Em dia — '+ok.length+'</summary><div class=llist>'+ok.map(l=>item(key,l)).join('')+'</div></details>';
+  if(ok.length)h+='<details class=emdia'+(((refresh&&abertoAntes)||key==='agendado')?' open':'')+'><summary>✓ Em dia — '+ok.length+'</summary><div class=llist>'+ok.map(l=>item(key,l)).join('')+'</div></details>';
   E('dbody').innerHTML=h;if(!refresh){E('dbody').scrollTop=0;openDrawer();}
 }
 async function openLead(key,conv){
@@ -236,8 +245,14 @@ async function openLead(key,conv){
       '<div class=block><div class=t>Próxima condução</div><p>'+esc(a.conducao)+'</p></div>'+
       '<div class=block><div class=t>Sugestão de mensagem</div><div class=msg><span class=lab>Pronta pra enviar · método Instituto</span>'+esc(a.mensagem)+'</div><button class=cp onclick="cp()">📋 Copiar mensagem</button></div>'+
       (a.cache?'<div class=load style="text-align:left;padding:4px 0">(análise em cache)</div>':'')+
+      (EU.gestao?'<div class=nlead>Não é lead? (só gestão) <div>'+[['fornecedor_parceiro','Fornecedor / parceiro'],['equipe_interna','Equipe'],['teste_interno','Teste'],['spam','Spam']].map(([k,v])=>'<button onclick="naoLead(\''+esc(l.telefone||'')+'\',\''+k+'\',\''+v+'\')">'+v+'</button>').join('')+'</div></div>':'')+
       '<div><button class=btn-trat onclick="tratar(\''+l.conv+'\',\''+(l.lt||'')+'\')">✓ Já fiz o próximo passo no CRM</button><div style="font-size:.74rem;color:var(--muted);margin-top:6px">O sistema confere no CRM em até 15 min. Vale tarefa com data ou agendamento. Se não achar, o lead volta para "precisa de ação".</div></div>';
   }catch(e){const jb=document.querySelector('.jar .jbody');if(jb)jb.innerHTML='<div class=load>Falha ao analisar.</div>';}
+}
+async function naoLead(tel,tipo,rot){
+  if(!confirm('Marcar este contato como "'+rot+'"? Ele sai do termômetro, da cadência e do Diário.'))return;
+  try{const r=await api('/tipo?telefone='+encodeURIComponent(tel)+'&tipo='+tipo,{method:'POST'});if(!r.ok)throw new Error(r.status);}catch(e){alert('Não consegui marcar: '+e.message);return;}
+  closeDrawer();VIEW={};setTimeout(carrega,2500);
 }
 async function tratar(conv,lt){
   if(!confirm('Confirma que já registrou o próximo passo no CRM (tarefa com data ou agendamento)? O sistema vai conferir.'))return;

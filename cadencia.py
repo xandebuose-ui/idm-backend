@@ -92,7 +92,12 @@ def gerar(db, dia):
             continue                                   # tem proximo passo com data: em dia
         if not pp.get("tem_opp_viva"):
             continue
-        tipo = "atualizar_etapa" if (pp.get("ok") and pp.get("atualizar_etapa")) else "proximo_passo"
+        if pp.get("ok") and pp.get("atualizar_etapa"):
+            tipo = "atualizar_etapa"
+        elif pp.get("tipo") == "agendamento_sem_agenda":
+            tipo = "lancar_agendamento"
+        else:
+            tipo = "proximo_passo"
         crm = l.get("crm") or {}
         dono_nome = crm.get("vendedor") or (l.get("conduta") or {}).get("atendente")
         u = usuarios.get(_key(dono_nome)) if dono_nome else None
@@ -107,7 +112,11 @@ def gerar(db, dia):
     for it in itens:
         tid = "cad_%s_%s" % (dia, it["fone"])
         novos_ids.add(tid)
-        if it["tipo"] == "atualizar_etapa":
+        if it["tipo"] == "lancar_agendamento":
+            titulo = "📅 Lançar o agendamento na agenda ou corrigir a etapa: %s" % it["nome"]
+            desc = ("A oportunidade está na etapa Agendamento, mas não há horário na agenda do Clinic Expert. "
+                    "Se a pessoa agendou, lance o horário na agenda. Se não agendou, volte a etapa e crie a próxima tarefa COM DATA.")
+        elif it["tipo"] == "atualizar_etapa":
             titulo = "🔄 Atualizar etapa no CRM: %s" % it["nome"]
             desc = ("Já tem agendamento em %s, mas a oportunidade ainda está em %s. Mude a etapa para Agendamento."
                     % (_dm(it.get("pp_quando")), it.get("etapa") or "?"))
@@ -165,18 +174,25 @@ def rodar():
     return dict(ST)
 
 def texto_atendente(nome, itens, conf_dela=None):
-    L = ["*Bom dia, %s! ☀️ Cadência do dia — IDM*" % nome.split()[0], ""]
+    L = ["*Bom dia, %s! ☀️ Cadência do dia · IDM*" % nome.split()[0], ""]
     if conf_dela and conf_dela.get("total"):
         L.append("Ontem: %d de %d resolvidos." % (conf_dela["resolvidos"], conf_dela["total"]))
         L.append("")
-    pp = [i for i in itens if i.get("tipo") != "atualizar_etapa"]
+    pp = [i for i in itens if i.get("tipo") not in ("atualizar_etapa", "lancar_agendamento")]
     et = [i for i in itens if i.get("tipo") == "atualizar_etapa"]
+    la = [i for i in itens if i.get("tipo") == "lancar_agendamento"]
+    if la:
+        L.append("📅 *Etapa Agendamento sem horário na agenda* (%d):" % len(la))
+        for it in la[:10]:
+            L.append("• %s" % it["nome"])
+        L.append("→ Se agendou, lance o horário na agenda. Se não, volte a etapa e crie a próxima tarefa com data.")
+        L.append("")
     if pp:
         L.append("📌 Leads *sem próximo passo* no CRM (%d):" % len(pp))
         for it in pp[:20]:
             extra = "esperando você" if it.get("esperando") == "equipe" else (
                 "tarefa venceu %s" % _dm(it.get("pp_quando")) if it.get("pp_tipo") == "vencida" else "%dd sem conversa" % it["dias_parado"])
-            L.append("• %s — %s (%s)" % (it["nome"], it.get("etapa") or "?", extra))
+            L.append("• %s, %s (%s)" % (it["nome"], it.get("etapa") or "?", extra))
         if len(pp) > 20:
             L.append("… e mais %d no IDM (Minhas Tarefas)." % (len(pp) - 20))
         L.append("→ Para cada um: crie uma *tarefa com data* (ligar, nova abordagem…) ou faça o agendamento. Desistiu? Mova para Perdido.")
@@ -184,7 +200,7 @@ def texto_atendente(nome, itens, conf_dela=None):
     if et:
         L.append("🔄 *Já agendados* com etapa desatualizada no CRM (%d):" % len(et))
         for it in et[:10]:
-            L.append("• %s — agendado %s, etapa %s" % (it["nome"], _dm(it.get("pp_quando")), it.get("etapa") or "?"))
+            L.append("• %s: agendado %s, etapa %s" % (it["nome"], _dm(it.get("pp_quando")), it.get("etapa") or "?"))
         L.append("→ Mude a etapa para Agendamento.")
         L.append("")
     L.append("_Responda *ok* para manter este canal aberto._")

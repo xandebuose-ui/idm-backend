@@ -890,9 +890,9 @@ _SCHED = None
 NOVIDADE_HOOKS = []   # funcoes chamadas com a lista de conversas que tiveram mensagem nova no ciclo
 
 def _conv_tick():
-    # 30/10: radar. Horario comercial ampliado (07h-21h) = a cada 1 min; fora dele, a cada CONV_MIN.
-    n = _agora_sp()
-    if 7 <= n.hour < 21 or n.minute % max(CONV_MIN, 1) == 0:
+    # 30/10: radar a cada 1 min.
+    # 30/10 (Xandao): roda das 06h00 as 23h59; pausa total da 00h00 as 05h59.
+    if _agora_sp().hour >= 6:
         ciclo_conversas("poll")
 
 def iniciar():

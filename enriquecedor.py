@@ -468,7 +468,10 @@ def rodar(motivo="poll", so_mudadas=True, com_ia=True):
                     ia_pend += 1
             _ia_now = (doc.get("ia") or ant.get("ia") or {})
             _tp = _ia_now.get("tipo_contato")
-            if doc.get("interno"):
+            if ant.get("tipo_manual") and ant.get("tipo_contato"):
+                doc["tipo_contato"] = ant["tipo_contato"]          # 30/10: botao "Nao e lead" da gestao vence a IA
+                doc["tipo_manual"] = True
+            elif doc.get("interno"):
                 doc["tipo_contato"] = "equipe_interna"
             elif _tp in ("fornecedor_parceiro", "teste_interno", "equipe_interna", "spam"):
                 doc["tipo_contato"] = _tp

@@ -197,6 +197,77 @@ async def webhook_ce_crm(request: Request):
             acionou = True
     return {"ok": True, "evt": evt, "pipe": pipe, "stage": stage, "acionou_refresh": acionou}
 
+# ---------------- TimTim (webhook da conta do Instituto) ----------------
+# Receptor do webhook oficial do TimTim (lead.create / lead.update / lead_source.update /
+# message.create). Fase 1 (29/10/2026): so GRAVA o payload bruto no Firestore, colecao
+# escuta_tintim, 1 doc por evento — nenhum processamento ainda (o coletor unico le daqui).
+# Auth: o TimTim nao assina requisicoes -> segredo vai na URL (?k=TINTIM_WEBHOOK_KEY).
+# Sempre responde 200 quando o segredo bate, mesmo se o Firestore falhar (o TimTim desativa
+# o webhook sozinho em erro HTTP); a falha fica em _TT_STATS para o /webhook/tintim/status.
+TINTIM_WEBHOOK_KEY = os.environ.get("TINTIM_WEBHOOK_KEY", "")
+_TT_STATS = {"recebidos": 0, "gravados": 0, "erro_grava": 0, "nao_autorizado": 0,
+             "ultimo_em": None, "ultimo_evt": None, "ultimo_erro": None, "por_evento": {}}
+
+def _tt_doc_id(evt, body):
+    import hashlib as _h
+    ph = str(body.get("phone") or (body.get("lead") or {}).get("phone") or "")
+    mid = str(body.get("message_id") or "")
+    base = "%s|%s|%s|%s" % (evt, ph, mid, body.get("updated_isoformat") or body.get("updated") or "")
+    return dt.datetime.utcnow().strftime("%Y%m%d%H%M%S") + "_" + _h.sha1(base.encode()).hexdigest()[:10]
+
+@app.post("/webhook/tintim")
+async def webhook_tintim(request: Request, k: str = ""):
+    if not TINTIM_WEBHOOK_KEY or not hmac.compare_digest(k or "", TINTIM_WEBHOOK_KEY):
+        _TT_STATS["nao_autorizado"] += 1
+        raise HTTPException(status_code=401, detail="unauthorized")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {"_raw": (await request.body())[:4000].decode("utf-8", "ignore")}
+    if not isinstance(body, dict):
+        body = {"_raw": body}
+    evt = str(body.get("event_type") or "").lower() or "desconhecido"
+    _TT_STATS["recebidos"] += 1
+    _TT_STATS["ultimo_em"] = dt.datetime.utcnow().isoformat() + "Z"
+    _TT_STATS["ultimo_evt"] = evt
+    _TT_STATS["por_evento"][evt] = _TT_STATS["por_evento"].get(evt, 0) + 1
+    try:
+        db = _fw._get_db()
+        if db is None:
+            raise RuntimeError("firestore indisponivel")
+        coll = os.environ.get("ESCUTA_TINTIM_COLL", "escuta_tintim")
+        doc = {"evento": evt, "recebido_em": _TT_STATS["ultimo_em"],
+               "phone": body.get("phone") or (body.get("lead") or {}).get("phone"),
+               "payload": body}
+        db.collection(coll).document(_tt_doc_id(evt, body)).set(doc)
+        _TT_STATS["gravados"] += 1
+    except Exception as e:
+        _TT_STATS["erro_grava"] += 1
+        _TT_STATS["ultimo_erro"] = str(e)[:200]
+        print("[tintim] erro ao gravar:", e, flush=True)
+    try:
+        print("[tintim] evt=%s phone=%s" % (evt, (body.get("phone") or "")[-4:]), flush=True)
+    except Exception:
+        pass
+    return {"ok": True, "evento": evt}
+
+# ---------------- Meta Ads (token do usuario do sistema, so leitura) ----------------
+import meta_ads as _meta
+
+@app.get("/meta_status")
+def meta_status():
+    return _meta.status()
+
+import tintim_api as _tt
+
+@app.get("/tintim_status")
+def tintim_status():
+    return _tt.status()
+
+@app.get("/webhook/tintim/status")
+def webhook_tintim_status():
+    return {"configurado": bool(TINTIM_WEBHOOK_KEY), **_TT_STATS}
+
 @app.get("/webhook/ce-crm/last/{token}")
 def webhook_ce_crm_last(token: str):
     if not PANEL_TOKEN or not hmac.compare_digest(token, PANEL_TOKEN):
@@ -747,3 +818,18 @@ def _debug_cruzamento():
 @app.get("/debug_orfaos_res")
 def _debug_cruzamento_res():
     return {"dbg": _DBG_CRUZ, "prog": _cruz.PROG}
+
+
+# ======================= COLETOR UNICO (passo 2 · SPEC-Coletor-Unico 29/10) =======================
+# ADITIVO: le 1x e grava o bruto (conversas/crm/vendas/meta) no Firestore + GET /saude.
+# Nao altera termometro/Jarbas/painel (seguem FONTE=clinichat ate o passo 4).
+import coletor as _coletor
+app.include_router(_coletor.router)
+_coletor.registrar_extra("tintim_webhook", lambda: {"configurado": bool(TINTIM_WEBHOOK_KEY), **_TT_STATS})
+
+@app.on_event("startup")
+def _coletor_start():
+    try:
+        _coletor.iniciar()
+    except Exception as e:
+        print("[coletor] falha ao iniciar:", e, flush=True)

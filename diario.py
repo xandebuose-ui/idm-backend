@@ -192,6 +192,14 @@ def gerar(dia=None, gravar=True):
     L.append("")
     if c:
         L.append("*🌡️ Termômetro agora:* 🔥 %d · 🌤️ %d · ❄️ %d · 💰 %d cross-sell" % (c.get("quente", 0), c.get("morno", 0), c.get("frio", 0), c.get("cross_sell", 0)))
+    try:
+        _et = db.collection("escuta_etiquetas").document(d).get()
+        if _et.exists:
+            _pe = (_et.to_dict() or {}).get("por_etiqueta") or {}
+            if _pe:
+                L.append("🏷️ Etiquetas colocadas pelo sistema ontem: %d (%s)" % (sum(_pe.values()), ", ".join("%s %d" % (k, v) for k, v in _pe.items())))
+    except Exception:
+        pass
     L.append("Saúde: " + ("✅ todas as fontes OK" if not alertas else "⚠️ " + " | ".join(alertas[:3])))
     L.append("")
     L.append("_Responda *ok* para manter este canal aberto._")

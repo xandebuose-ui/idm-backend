@@ -1105,6 +1105,8 @@ def _coletor_start():
         _enriq.iniciar(_coletor._SCHED)
         _diario.iniciar(_coletor._SCHED)
         _cadencia.iniciar(_coletor._SCHED)
+        import etiquetas as _etq
+        _etq.iniciar(_coletor._SCHED)
     except Exception as e:
         print("[passo3] falha ao iniciar:", e, flush=True)
     # 30/10: radar (msg nova -> termometro na hora) + ciclos proprios (nao dependem de alguem com o painel aberto)
@@ -1532,3 +1534,11 @@ def admin_etiquetas_auditoria(x_idm_secret: str = Header(default=""), authorizat
                        "tags": tags, "tipo": fx.get("tipo"), "ident": fx.get("ident") or _cruz.classifica_identidade(f, ct.get("name")),
                        "serv": fx.get("serv"), "cir": fx.get("cir"), "orig": fx.get("orig"), "sit": fx.get("sit")})
     return {"ok": True, "contatos": len(linhas), "linhas": linhas}
+
+@app.post("/admin/etiquetas_rodar")
+def admin_etiquetas_rodar(aplicar: int = 0, x_idm_secret: str = Header(default=""), authorization: str = Header(default="")):
+    """aplicar=0: simulacao (lista o que seria etiquetado). aplicar=1: aplica (so adiciona; so leads)."""
+    if not _admin_ok(x_idm_secret, authorization):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    import etiquetas as _etq
+    return _etq.rodar(bool(aplicar), "manual")

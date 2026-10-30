@@ -123,7 +123,7 @@ def analisar(conv_id, meta=None):
     if not linhas:
         return {"ok": False, "motivo": "sem conversa legivel", "conv_id": conv_id}
     cached = _cache_get(conv_id)
-    if cached and cached.get("last_date") == last_date and cached.get("analise"):
+    if cached and cached.get("last_date") == last_date and cached.get("analise") and cached["analise"].get("temperatura"):
         return {"ok": True, "cache": True, "conv_id": conv_id, **cached["analise"]}
     transcript = "\n".join(linhas[-60:])
     ctx = []

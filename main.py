@@ -1057,11 +1057,14 @@ def pagina_fichas(token: str, f: str = "", limite: int = 80):
         ia = r["ia"]
         _ms = ia.get("momentos") if isinstance(ia.get("momentos"), list) else []
         mom = "; ".join(("%s: “%s”" % (m.get("tipo"), str(m.get("trecho") or "")[:60])) if isinstance(m, dict) else str(m) for m in _ms)
-        trs.append("<tr><td><b>%s</b><br><small>%s · %s</small></td><td>%s</td><td>%s</td><td>%s</td><td>%s<br><small>%s</small></td>"
+        _cd = r.get("conduta") or {}
+        _nt = r.get("nota")
+        trs.append("<tr><td><b>%s</b><br><small>%s · %s</small><br><small><b>%s</b></small></td><td>%s</td><td>%s</td><td>%s</td><td>%s<br><small>%s</small><br><b>%s</b> <small>%s</small></td>"
                    "<td><small>%s</small></td><td><small>%s</small></td><td><small>%s</small></td></tr>" % (
-                       e(r.get("nome") or r.get("fone")), e(r.get("identidade")), e(r.get("origem")),
+                       e(r.get("nome") or r.get("fone")), e(r.get("identidade")), e(r.get("origem")), e(r.get("tipo_contato") or ""),
                        e(", ".join(_lst(ia.get("servicos")))), e(", ".join(_lst(ia.get("cirurgias_origem")))), e(ia.get("intencao")),
                        e(ia.get("abordagem_nota")), e(", ".join(x for x in _lst(ia.get("abordagem_falhas")) if x != "nenhuma")),
+                       e(("nota %s/6" % str(_nt).replace(".", ",")) if _nt is not None else ""), e(_cd.get("atendente") or ""),
                        e(mom), e(ia.get("resumo")), e(", ".join(_lst(r.get("furos"))))))
       except Exception as _ex:
         trs.append("<tr><td colspan=8><small>(linha com dado irregular: %s)</small></td></tr>" % e(repr(_ex)[:80]))
@@ -1070,7 +1073,7 @@ def pagina_fichas(token: str, f: str = "", limite: int = 80):
             "h1{font-size:20px;margin:0 0 4px}.k{background:#fff;border-radius:10px;padding:10px 12px;margin:8px 0;font-size:13px;line-height:1.6}"
             "table{border-collapse:collapse;width:100%%;background:#fff;font-size:13px}td,th{border-bottom:1px solid #e3e7e3;padding:7px;vertical-align:top;text-align:left}"
             "th{background:#eef2ef;position:sticky;top:0}.wrap{overflow-x:auto}form{margin:8px 0}input{padding:7px;border:1px solid #ccd;border-radius:8px;width:240px}</style>"
-            "<h1>Fichas — categorias em RASCUNHO (%d com análise)</h1>"
+            "<h1>Fichas — categorias v1 (%d com análise)</h1>"
             "<div style='color:#5e6b64;font-size:12px'>Só leitura. Para validar a lista e a régua. Fechou/não fechou nunca vem da IA.</div>"
             "<form><input name=f value='%s' placeholder='filtrar: abdominoplastia, laser, com_falhas, Tráfego...'> <button>filtrar</button></form>"
             "<div class=k><b>Serviços:</b> %s<br><b>Cirurgias de origem:</b> %s<br><b>Intenção:</b> %s<br><b>Abordagem:</b> %s</div>"

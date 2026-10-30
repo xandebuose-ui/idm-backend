@@ -968,3 +968,52 @@ def api_leads_tratar(conv_id: str, lt: str = "", desfazer: bool = False, authori
     except Exception:
         pass
     return r
+
+
+# ======================= FICHAS (validacao das categorias - rascunho) =======================
+# 30/10: pagina so-leitura para o Xandao validar o rascunho das categorias com casos reais.
+@app.get("/p/{token}/fichas", response_class=HTMLResponse)
+def pagina_fichas(token: str, f: str = "", limite: int = 80):
+    if not PANEL_TOKEN or not hmac.compare_digest(token, PANEL_TOKEN):
+        raise HTTPException(status_code=404, detail="not found")
+    import html as _h
+    db = _fw._get_db()
+    if not db:
+        return HTMLResponse("sem banco")
+    rows = [d.to_dict() or {} for d in db.collection("escuta_leads").stream()]
+    rows = [r for r in rows if r.get("ia") and r.get("identidade") != "sem_telefone"]
+    if f:
+        fl = f.lower()
+        rows = [r for r in rows if fl in json.dumps(r.get("ia"), ensure_ascii=False).lower() or fl in (r.get("origem") or "").lower()
+                or fl in (r.get("identidade") or "")]
+    rows.sort(key=lambda r: r.get("ultima_msg_em") or "", reverse=True)
+    from collections import Counter as _C
+    cs, cc, ci, cn = _C(), _C(), _C(), _C()
+    for r in rows:
+        ia = r["ia"]
+        cs.update(ia.get("servicos") or []); cc.update(ia.get("cirurgias_origem") or [])
+        ci.update([ia.get("intencao")]); cn.update([ia.get("abordagem_nota")])
+    def top(c): return " · ".join("%s <b>%d</b>" % (_h.escape(str(k)), v) for k, v in c.most_common(12))
+    e = lambda x: _h.escape(str(x if x is not None else ""))
+    trs = []
+    for r in rows[:max(1, min(limite, 500))]:
+        ia = r["ia"]
+        mom = "; ".join("%s: “%s”" % (m.get("tipo"), (m.get("trecho") or "")[:60]) for m in (ia.get("momentos") or []))
+        trs.append("<tr><td><b>%s</b><br><small>%s · %s</small></td><td>%s</td><td>%s</td><td>%s</td><td>%s<br><small>%s</small></td>"
+                   "<td><small>%s</small></td><td><small>%s</small></td><td><small>%s</small></td></tr>" % (
+                       e(r.get("nome") or r.get("fone")), e(r.get("identidade")), e(r.get("origem")),
+                       e(", ".join(ia.get("servicos") or [])), e(", ".join(ia.get("cirurgias_origem") or [])), e(ia.get("intencao")),
+                       e(ia.get("abordagem_nota")), e(", ".join(x for x in (ia.get("abordagem_falhas") or []) if x != "nenhuma")),
+                       e(mom), e(ia.get("resumo")), e(", ".join(r.get("furos") or []))))
+    page = ("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>IDM Fichas (rascunho)</title>"
+            "<style>body{font-family:-apple-system,Segoe UI,sans-serif;margin:0;padding:14px;background:#f4f6f4;color:#17201c}"
+            "h1{font-size:20px;margin:0 0 4px}.k{background:#fff;border-radius:10px;padding:10px 12px;margin:8px 0;font-size:13px;line-height:1.6}"
+            "table{border-collapse:collapse;width:100%;background:#fff;font-size:13px}td,th{border-bottom:1px solid #e3e7e3;padding:7px;vertical-align:top;text-align:left}"
+            "th{background:#eef2ef;position:sticky;top:0}.wrap{overflow-x:auto}form{margin:8px 0}input{padding:7px;border:1px solid #ccd;border-radius:8px;width:240px}</style>"
+            "<h1>Fichas — categorias em RASCUNHO (%d com análise)</h1>"
+            "<div style='color:#5e6b64;font-size:12px'>Só leitura. Para validar a lista e a régua. Fechou/não fechou nunca vem da IA.</div>"
+            "<form><input name=f value='%s' placeholder='filtrar: abdominoplastia, laser, com_falhas, Tráfego...'> <button>filtrar</button></form>"
+            "<div class=k><b>Serviços:</b> %s<br><b>Cirurgias de origem:</b> %s<br><b>Intenção:</b> %s<br><b>Abordagem:</b> %s</div>"
+            "<div class=wrap><table><tr><th>Pessoa</th><th>Serviço</th><th>Cirurgia</th><th>Intenção</th><th>Abordagem</th><th>Momentos-chave</th><th>Resumo</th><th>Furos (regra)</th></tr>%s</table></div>"
+            ) % (len(rows), e(f), top(cs), top(cc), top(ci), top(cn), "".join(trs))
+    return HTMLResponse(page, headers={"Cache-Control": "no-store"})

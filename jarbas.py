@@ -27,6 +27,13 @@ def _cerebro():
     return _cerebro_cache
 
 def _transcript(conv_id, max_msgs=40):
+    try:                                    # 30/10 passo 4: banco primeiro (ultimas mensagens), CliniChat so se faltar
+        import fonte as _fonte
+        r = _fonte.transcript(conv_id, max_msgs)
+        if r:
+            return r
+    except Exception:
+        pass
     data, err = _cruz._cc("/conversation/messages/%s?from=0&to=%d&orderBy=createdAt%%3AASC&filters=%%7B%%7D" % (conv_id, max_msgs))
     if err or not data:
         return [], (err or "sem_dados")

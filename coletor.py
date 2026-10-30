@@ -210,6 +210,43 @@ def _lt(cc):
 def _criado(cc):
     return cc.get("createdAt") or (cc.get("conversation") or {}).get("createdAt") or ""
 
+# ---- 30/10 passo 4: INDICE de conversas (1 doc) -> as frentes leem daqui, nao da CliniChat ----
+INDICE = {}          # conversationId -> cc minimo (mesmo formato do contact-channel)
+INDICE_ST = {"gravado_em": None, "n": 0, "hash": None}
+
+def _indexa(c):
+    try:
+        cid = str(c.get("conversationId") or "")
+        if not cid:
+            return
+        ct = c.get("contact") or {}
+        cv = c.get("conversation") or {}
+        lm = cv.get("lastMessage") if isinstance(cv.get("lastMessage"), dict) else {}
+        INDICE[cid] = {
+            "conversationId": cid, "id": c.get("id"), "identifier": c.get("identifier"),
+            "createdAt": c.get("createdAt") or cv.get("createdAt"),
+            "contact": {"name": ct.get("name"), "phone": ct.get("phone"), "externalId": ct.get("externalId"),
+                        "type": ct.get("type"),
+                        "tags": [{"uuid": t.get("uuid"), "label": t.get("label")} for t in (ct.get("tags") or []) if isinstance(t, dict)]},
+            "conversation": {"createdAt": cv.get("createdAt"),
+                             "lastMessage": {"createdAt": lm.get("createdAt"), "senderType": lm.get("senderType")}},
+        }
+    except Exception:
+        pass
+
+def _grava_indice(db):
+    """1 doc com todas as conversas (contato, etiquetas, cadastro, ultima msg). So grava se mudou."""
+    import hashlib as _h
+    if not INDICE:
+        return
+    itens = sorted(INDICE.values(), key=lambda x: str(x.get("conversationId")))
+    s = json.dumps(itens, ensure_ascii=False, sort_keys=True, default=str)
+    hh = _h.sha1(s.encode()).hexdigest()
+    if hh == INDICE_ST["hash"]:
+        return
+    db.collection("escuta_indice").document("conversas").set({"itens": itens, "n": len(itens), "gravado_em": _iso()})
+    INDICE_ST.update({"gravado_em": _iso(), "n": len(itens), "hash": hh})
+
 def _lista(desde_dt=None, cap=LISTA_CAP):
     """contact-channel (historico inteiro, filters={}) ordenado por lastMessageTime DESC.
     Com desde_dt: so conversas com atividade depois dele; para de paginar quando a pagina
@@ -225,6 +262,7 @@ def _lista(desde_dt=None, cap=LISTA_CAP):
         total = ((data.get("pagination") or {}).get("total")) or 0
         abaixo = 0
         for c in ccs:
+            _indexa(c)
             _amostra("lastMessageTime", c.get("lastMessageTime"))
             _campos_conv(c)
             try:
@@ -303,6 +341,9 @@ def _msg_doc(m, cid, fk):
         "tipo": tipo, "midia": bool(midia), "texto": txt[:20000],
         "transcricao": (m.get("audioTextContent") or "")[:20000],
         "atividade": m.get("activityType"), "lida_em": m.get("readAt"),
+        # 30/10 passo 4: reacoes (emoji) - so quem reagiu (equipe/lead), nunca conteudo
+        "reacoes": [("lead" if str((r or {}).get("senderType") or "").lower().startswith("contact") else "equipe")
+                    for r in (m.get("reactions") or []) if isinstance(r, dict)][:10],
         "gravado_em": _iso(), "expira_em": (dd or _utcnow()) + dt.timedelta(days=RETENCAO_DIAS),
     }
     mes = (dd - dt.timedelta(hours=3)).strftime("%Y-%m") if dd else "sem_data"   # nunca inventa data
@@ -417,6 +458,7 @@ def _coletar_conv(db, cc, forcar_tudo=False):
     convs[cid] = {**est, **entrada}
     total_msgs = sum(int((v or {}).get("total_api") or 0) for v in convs.values())
     ficha = {"fone": fk, "fone_raw": fraw, "nome": ct.get("name"), "external_id": ext,
+             "tags": [t.get("label") for t in (ct.get("tags") or []) if isinstance(t, dict)],
              "tipo_contato": ct.get("type"), "canal": (cc.get("channel") or {}).get("type") if isinstance(cc.get("channel"), dict) else cc.get("channel"),
              "convs": {cid: convs[cid]}, "total_msgs": total_msgs, "atualizado_em": _iso()}
     candidatos = [x for x in (_parse(cur.get("primeira_chegada")), _parse(_criado(cc)), prim_dt) if x is not None]
@@ -468,6 +510,11 @@ def ciclo_conversas(motivo="poll"):
             if novo > wm:
                 WM["conversas_lt"] = _iso(novo)
         ok = not err_lista and not falhas
+        if not err_lista:
+            try:
+                _grava_indice(db)
+            except Exception as _ei:
+                print("[coletor] indice erro:", repr(_ei)[:120], flush=True)
         for _h in list(NOVIDADE_HOOKS):      # 30/10 radar: avisa o termometro na hora (lead novo / msg nova)
             try:
                 _h(novidades)
@@ -894,6 +941,29 @@ def _conv_tick():
     # 30/10 (Xandao): roda das 06h00 as 23h59; pausa total da 00h00 as 05h59.
     if _agora_sp().hour >= 6:
         ciclo_conversas("poll")
+
+def releitura(apenas_lead_ultimo=True, limite=400):
+    """30/10 passo 4: rele conversas (forcar_tudo) para gravar reacoes nas mensagens antigas."""
+    db = _db()
+    feitas = 0
+    alvos = []
+    for d in db.collection(COLL_CONV).stream():
+        x = d.to_dict() or {}
+        if apenas_lead_ultimo and x.get("ultima_msg_de") != "lead":
+            continue
+        for cid in (x.get("convs") or {}):
+            alvos.append(cid)
+    for cid in alvos[:limite]:
+        cc = INDICE.get(str(cid))
+        if not cc:
+            continue
+        try:
+            _coletar_conv(db, cc, forcar_tudo=True)
+            feitas += 1
+        except Exception:
+            pass
+        time.sleep(0.2)
+    return {"ok": True, "alvos": len(alvos), "relidas": feitas}
 
 def iniciar():
     """Chamado no startup do main. Scheduler PROPRIO (o do main nao esta registrado no app)."""

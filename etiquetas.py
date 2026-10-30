@@ -44,7 +44,8 @@ def plano():
     db = _fw._get_db()
     fichas = {d.id: (d.to_dict() or {}) for d in db.collection("escuta_leads").stream()}
     manual = {d.id: (d.to_dict() or {}).get("tipo") for d in db.collection("escuta_tipo_manual").stream()}
-    convs = _cruz._lista(None, cap=3000)
+    import fonte as _fonte
+    convs = _fonte.indice() or _cruz._lista(None, cap=3000)
     out = {k: [] for k in TAGS}
     vistos = set()
     for c in convs:

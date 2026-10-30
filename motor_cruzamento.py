@@ -80,6 +80,7 @@ _RUIDO = re.compile(r"confirme o seu hor|j. est. reservad|uhuull|para confirmar 
 _FORN = re.compile(r"represent|fornecedor|parceria|cat.logo|tabela de pre|revenda|distribuidor|tem mais clientes|divulga|antecipa..o de recebi", re.I)
 
 _MSG_CACHE = {}
+_FONTE_ULTIMA = None
 
 def _lt_conv(c):
     # Ultima atividade REAL = data da ultima MENSAGEM (29/10/2026).
@@ -196,6 +197,19 @@ def ultima_do_lead(conv_id, lt):
     k = (str(conv_id), lt or "")
     if k in _ULT_CACHE:
         return _ULT_CACHE[k]
+    try:                                    # 30/10 passo 4: banco primeiro
+        import fonte as _fonte
+        _m = _fonte.ultima(conv_id, lt)
+        if _m:
+            txt = (_m.get("texto") or "").strip()
+            reac = _m.get("reacoes") or []
+            out = {"de": _m.get("de"), "reagida": any(r != "lead" for r in reac),
+                   "confirmacao": bool(txt) and len(txt) <= 120 and "?" not in txt and bool(_CONFIRMA.match(txt)),
+                   "tipo": _m.get("tipo"), "n_reacoes": len(reac), "fonte": "banco"}
+            _ULT_CACHE[k] = out
+            return out
+    except Exception:
+        pass
     data, err = _cc("/conversation/messages/%s?from=0&to=8&orderBy=createdAt%%3ADESC&filters=%%7B%%7D" % conv_id)
     if err or not data:
         return None
@@ -220,6 +234,14 @@ def ultima_do_lead(conv_id, lt):
 def _primeira_msg(conv_id):
     if conv_id in _MSG_CACHE:
         return _MSG_CACHE[conv_id]
+    try:                                    # 30/10 passo 4: banco primeiro
+        import fonte as _fonte
+        _t = _fonte.primeira_do_lead(conv_id)
+        if _t:
+            _MSG_CACHE[conv_id] = _t
+            return _t
+    except Exception:
+        pass
     data, err = _cc("/conversation/messages/%s?from=0&to=25&orderBy=createdAt%%3AASC&filters=%%7B%%7D" % conv_id)
     if err or not data:
         time.sleep(0.3)
@@ -523,6 +545,8 @@ def rodar_cruzamento(max_msg=130):
     t0 = time.time()
     _prog("START")
     opp_fones, comprou_fones, opp_nomes, n_opps, idx_diag = _indice_ce()
+    global _FONTE_ULTIMA
+    _FONTE_ULTIMA = "clinichat"
     _prog('indice ok opps=%d' % n_opps)
     _GATE = verificar_gate()
     if not _GATE["passou"]:
@@ -531,8 +555,17 @@ def rodar_cruzamento(max_msg=130):
                 "gate_falhou": True, "gate": _GATE, "diag_idx": idx_diag, "opps_crm": n_opps}
     _IDX_CACHE["data"] = (opp_fones, comprou_fones, opp_nomes); _IDX_CACHE["t"] = time.time()
     desde = os.environ.get("ESCUTA_DESDE") or (dt.date.today() - dt.timedelta(days=int(os.environ.get("ESCUTA_DIAS", "90")))).isoformat()
-    convs = _lista(None)
-    _prog('lista %d convs' % len(convs))
+    convs = None
+    try:                                    # 30/10 passo 4: lista do indice gravado pelo coletor
+        import fonte as _fonte
+        convs = _fonte.indice()
+        if convs:
+            _FONTE_ULTIMA = "banco"
+    except Exception:
+        convs = None
+    if not convs:
+        convs = _lista(None)
+    _prog('lista %d convs (fonte=%s)' % (len(convs), _FONTE_ULTIMA))
     seen, fila, total = set(), [], 0
     for c in convs:
         cid = c.get("conversationId")

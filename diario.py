@@ -119,6 +119,15 @@ def gerar(dia=None, gravar=True):
     except Exception as e:
         alertas = ["saude indisponivel: %s" % str(e)[:60]]
 
+    try:                                    # 30/10 passo 4: aviso do cracha da CliniChat
+        _ti = _fw.token_info()
+        _hh = _ti.get("expira_em_horas")
+        if _ti.get("vencido"):
+            alertas.insert(0, "CRACHÁ DA CLINICHAT VENCIDO: renove já (nada novo entra no sistema)")
+        elif _hh is not None and _hh <= 72:
+            alertas.insert(0, "crachá da CliniChat vence em %d h: renove" % int(_hh))
+    except Exception:
+        pass
     c = (term.get("contagem") or {})
     L = []
     L.append("*IDM · Diário comercial · %s %s*" % (DIAS_PT[dd.weekday()], dd.strftime("%d/%m")))

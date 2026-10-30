@@ -863,6 +863,8 @@ def _rodar_termometro(motivo="poll"):
                "vazamento_total": sum(1 for _b in ("quente", "morno", "frio", "cross_sell")
                                       for _l in baldes[_b] if _l.get("vazamento")),
                "alertas": alertas, "pendentes": pendentes, "fora_do_termometro": fora, "atencao": atencao,
+               "cracha": {k: _fw.token_info().get(k) for k in ("expira_em_horas", "vencido", "nivel")},
+               "fonte_lista": getattr(_cruz, "_FONTE_ULTIMA", None),
                "regras": {"quente_ate_dias": TERM_DIAS_QUENTE, "morno_ate_dias": TERM_DIAS_MORNO},
                "agenda": {"n": _cruz._AGENDA.get("n"), "erro": _cruz._AGENDA.get("erro")}, **baldes}
         _TERM["result"] = res; _TERM["quando"] = res["gerado_em"]
@@ -1545,3 +1547,108 @@ def admin_etiquetas_rodar(aplicar: int = 0, x_idm_secret: str = Header(default="
         raise HTTPException(status_code=401, detail="unauthorized")
     import etiquetas as _etq
     return _etq.rodar(bool(aplicar), "manual")
+
+
+# ======================= PASSO 4 (30/10): aviso do cracha + comparacao banco x CliniChat =======================
+def _aviso_cracha_whatsapp():
+    """2x/dia: se o cracha vence em <=48h, manda 1 aviso por dia ao Xandao (o envio ainda funciona)."""
+    try:
+        ti = _fw.token_info()
+        hh = ti.get("expira_em_horas")
+        if hh is None or hh > 48 or ti.get("vencido"):
+            return
+        db = _fw._get_db()
+        k = "cracha_" + _sp_now().date().isoformat()
+        ref = db.collection("escuta_alertas").document(k)
+        if ref.get().exists:
+            return
+        r = _diario.enviar("⚠️ Jarbas: o crachá da CliniChat vence em %d h. Renove para o painel, o radar, as etiquetas e o Diário continuarem funcionando." % int(hh))
+        ref.set({"enviado_em": _sp_now().isoformat(timespec="seconds"), "ok": r.get("ok"), "horas": hh})
+    except Exception as e:
+        print("[cracha] aviso erro:", repr(e)[:120], flush=True)
+
+try:
+    _coletor.NOVIDADE_HOOKS  # garante modulo carregado
+except Exception:
+    pass
+
+@app.on_event("startup")
+def _passo4_start():
+    try:
+        if _coletor._SCHED is not None:
+            _coletor._SCHED.add_job(_aviso_cracha_whatsapp, "cron", hour="9,18", minute=5)
+    except Exception as e:
+        print("[passo4] start erro:", e, flush=True)
+
+@app.get("/admin/fonte_comparar")
+def admin_fonte_comparar(amostra: int = 12, x_idm_secret: str = Header(default=""), authorization: str = Header(default="")):
+    """Prova do passo 4: compara o BANCO com a CliniChat (lista de conversas, ultima msg e transcricao)."""
+    if not _admin_ok(x_idm_secret, authorization):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    import fonte as _fonte, jarbas as _jb
+    out = {"fonte_st": _fonte.ST}
+    idx = _fonte.indice(max_idade_min=10**6, forcar=True) or []
+    vivo = _cruz._lista(None, cap=3000)
+    a = {str(c.get("conversationId")): c for c in idx}
+    b = {str(c.get("conversationId")): c for c in vivo}
+    so_banco = [k for k in a if k not in b]
+    so_vivo = [k for k in b if k not in a]
+    lt_dif = [k for k in a if k in b and (_cruz._lt_conv(a[k]) or "")[:16] != (_cruz._lt_conv(b[k]) or "")[:16]]
+    de_dif = [k for k in a if k in b and _cruz._de_conv(a[k]) != _cruz._de_conv(b[k])]
+    tg_dif = [k for k in a if k in b and sorted(t.get("uuid") for t in ((a[k].get("contact") or {}).get("tags") or []))
+              != sorted(t.get("uuid") for t in ((b[k].get("contact") or {}).get("tags") or []) if isinstance(t, dict))]
+    out["lista"] = {"banco": len(a), "clinichat": len(b), "so_no_banco": len(so_banco), "so_na_clinichat": len(so_vivo),
+                    "data_ultima_msg_diferente": len(lt_dif), "quem_mandou_diferente": len(de_dif), "etiquetas_diferentes": len(tg_dif),
+                    "exemplos_so_clinichat": [(b[k].get("contact") or {}).get("name") for k in so_vivo[:5]]}
+    # transcricao e ultima msg: amostra das conversas mais recentes
+    rec = sorted(b.values(), key=lambda c: _cruz._lt_conv(c) or "", reverse=True)[:amostra]
+    tr_ok = tr_parcial = tr_sem = 0
+    ul_ok = ul_dif = ul_sem = 0
+    det = []
+    for c in rec:
+        cid = str(c.get("conversationId"))
+        db_t = _fonte.transcript(cid, 25, forcar=True)
+        data, err = _cruz._cc("/conversation/messages/%s?from=0&to=25&orderBy=createdAt%%3ADESC&filters=%%7B%%7D" % cid)
+        its = sorted([m for m in ((data or {}).get("conversationItems") or []) if m.get("senderType") in ("contacts", "users")],
+                     key=lambda m: m.get("date") or "")
+        vivo_txt = [(m.get("content") or "").strip() for m in its if (m.get("content") or "").strip()]
+        if not db_t:
+            tr_sem += 1
+        else:
+            banco_txt = [l.split(": ", 1)[1] for l in db_t[0]]
+            ult = vivo_txt[-5:]
+            hit = sum(1 for t in ult if t in banco_txt)
+            if hit == len(ult):
+                tr_ok += 1
+            else:
+                tr_parcial += 1
+                det.append({"nome": (c.get("contact") or {}).get("name"), "ultimas_vivo": len(ult), "achadas_no_banco": hit})
+        m = _fonte.ultima(cid, _cruz._lt_conv(c), forcar=True)
+        if not m:
+            ul_sem += 1
+        elif its and m.get("de") == ("lead" if its[-1].get("senderType") == "contacts" else "equipe"):
+            ul_ok += 1
+        else:
+            ul_dif += 1
+    out["transcricao"] = {"amostra": len(rec), "igual": tr_ok, "parcial": tr_parcial, "sem_no_banco": tr_sem, "detalhe": det[:6]}
+    out["ultima_msg"] = {"igual": ul_ok, "diferente": ul_dif, "sem_no_banco_ou_atrasado": ul_sem}
+    return out
+
+@app.post("/admin/releitura")
+def admin_releitura(x_idm_secret: str = Header(default=""), authorization: str = Header(default="")):
+    """Rele (em segundo plano) as conversas cuja ultima msg e do lead, para gravar as reacoes."""
+    if not _admin_ok(x_idm_secret, authorization):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    threading.Thread(target=lambda: print("[releitura]", _coletor.releitura(), flush=True), daemon=True).start()
+    return {"ok": True, "iniciado": True}
+
+@app.post("/admin/fonte_modo")
+def admin_fonte_modo(lista: str = "", conversa: str = "", x_idm_secret: str = Header(default=""), authorization: str = Header(default="")):
+    """Vira a chave por frente: firestore | clinichat (sem publicar de novo)."""
+    if not _admin_ok(x_idm_secret, authorization):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    for v in (lista, conversa):
+        if v and v not in ("firestore", "clinichat"):
+            raise HTTPException(status_code=400, detail="use firestore ou clinichat")
+    import fonte as _fonte
+    return _fonte.definir_modo(lista or None, conversa or None)

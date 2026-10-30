@@ -162,12 +162,15 @@ def gerar(dia=None, gravar=True):
     if c:
         L.append("*🌡️ Termômetro agora:* 🔥 %d · 🌤️ %d · ❄️ %d · 💰 %d cross-sell" % (c.get("quente", 0), c.get("morno", 0), c.get("frio", 0), c.get("cross_sell", 0)))
     L.append("— Saúde: " + ("✅ todas as fontes OK" if not alertas else "⚠️ " + " | ".join(alertas[:3])))
+    L.append("")
+    L.append("_Responda *ok* para manter este canal aberto._")
     texto = "\n".join(L)
 
     dados = {"dia": d, "chegadas": len(cheg), "leads_novos": len(novos), "clientes_voltaram": len(clientes),
              "por_origem": dict(por_origem), "trafego_pago_1a_msg": trafego, "meta_gasto": gasto, "meta_conversas": conv_meta,
              "cpl": cpl, "opps_criadas": len(criadas), "opps_movimentadas": len(mexidas), "orcamentos": len(orc_d),
-             "vendas": len(ganhos_d), "notas_atendente": notas, "sem_resposta": len(sem_resp), "sem_resposta_48h_mais": len(sem_resp_velhos), "sem_oportunidade": len(sem_opp),
+             "vendas": len(ganhos_d), "notas_atendente": [{"atendente": a, "nota": n, "conversas": q} for a, n, q in notas],
+             "sem_resposta": len(sem_resp), "sem_resposta_48h_mais": len(sem_resp_velhos), "sem_oportunidade": len(sem_opp),
              "cidade_nao_perguntada": len(cidade), "origem_nao_perguntada": len(origem_np), "sem_tarefa": len(sem_tarefa),
              "t1_mediana_min": t1_med, "t1_acima_1h": lentos, "alertas": alertas}
     if gravar:
@@ -281,7 +284,14 @@ def enviar(texto, fone=None):
     return dict(ENVIO)
 
 def gerar_e_enviar():
-    r = gerar()
+    try:
+        r = gerar()
+    except Exception as ex:
+        import traceback as _tb
+        ENVIO.update({"ultimo_em": _sp_now().isoformat(timespec="seconds"), "ok": False,
+                      "erro": "falha ao GERAR o diario: %s" % repr(ex)[:160]})
+        print("[diario] erro ao gerar:", _tb.format_exc(), flush=True)
+        return {"ok": False, "erro": repr(ex)[:200]}
     if DIARIO_ENVIO and r.get("ok"):
         e = enviar(r["texto"].replace("_prévia — gerado", "_gerado"))
         try:

@@ -898,7 +898,19 @@ def rota_enriquecer(modo: str = "poll", x_idm_secret: str = Header(default=""), 
 def rota_diario_gerar(d: str = "", x_idm_secret: str = Header(default=""), authorization: str = Header(default="")):
     if not _admin_ok(x_idm_secret, authorization):
         raise HTTPException(status_code=401, detail="unauthorized")
-    return _diario.gerar(d or None)
+    try:
+        return _diario.gerar(d or None)
+    except Exception as ex:
+        import traceback as _tb
+        return JSONResponse({"ok": False, "erro": repr(ex)[:300], "tb": _tb.format_exc()[-1500:]}, status_code=200)
+
+@app.post("/diario/enviar")
+def rota_diario_enviar(authorization: str = Header(default=""), x_idm_secret: str = Header(default="")):
+    # gera o diario de ontem e ENVIA pelo CliniChat (o mesmo do job das 06h45)
+    if not _admin_ok(x_idm_secret, authorization):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    r = _diario.gerar_e_enviar()
+    return {"gerado": r.get("ok"), "erro_geracao": r.get("erro"), "envio": dict(_diario.ENVIO)}
 
 @app.post("/diario/teste_envio")
 def rota_diario_teste_envio(authorization: str = Header(default=""), x_idm_secret: str = Header(default="")):

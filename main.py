@@ -826,6 +826,38 @@ def _debug_cruzamento_res():
 import coletor as _coletor
 app.include_router(_coletor.router)
 _coletor.registrar_extra("tintim_webhook", lambda: {"configurado": bool(TINTIM_WEBHOOK_KEY), **_TT_STATS})
+import enriquecedor as _enriq
+import diario as _diario
+_coletor.registrar_extra("ficha_viva", lambda: dict(_enriq.ST))
+
+@app.post("/coletor/enriquecer")
+def rota_enriquecer(modo: str = "poll", x_idm_secret: str = Header(default="")):
+    if not WEBHOOK_SECRET or not hmac.compare_digest(x_idm_secret, WEBHOOK_SECRET):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    threading.Thread(target=_enriq.rodar, args=(modo, modo != "completo", True), daemon=True).start()
+    return {"ok": True, "iniciado": modo}
+
+@app.post("/diario/gerar")
+def rota_diario_gerar(d: str = "", x_idm_secret: str = Header(default="")):
+    if not WEBHOOK_SECRET or not hmac.compare_digest(x_idm_secret, WEBHOOK_SECRET):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    return _diario.gerar(d or None)
+
+@app.get("/p/{token}/diario", response_class=HTMLResponse)
+def pagina_diario(token: str, d: str = ""):
+    if not PANEL_TOKEN or not hmac.compare_digest(token, PANEL_TOKEN):
+        raise HTTPException(status_code=404, detail="not found")
+    r = _diario.ler(d or None)
+    if not r:
+        return HTMLResponse("<p style='font-family:sans-serif;padding:20px'>Diario ainda nao gerado para esse dia.</p>")
+    import html as _h
+    t = _h.escape(r.get("texto") or "")
+    return HTMLResponse("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+                        "<title>IDM Diario</title><body style='font-family:-apple-system,Segoe UI,sans-serif;background:#f4f6f4;"
+                        "padding:16px;max-width:640px;margin:auto'><pre style='white-space:pre-wrap;background:#fff;border-radius:12px;"
+                        "padding:16px;font-size:15px;line-height:1.5;box-shadow:0 1px 3px rgba(0,0,0,.08)'>" + t + "</pre>"
+                        "<p style='color:#667;font-size:12px'>Previa - nada foi enviado por WhatsApp. Gerado " +
+                        _h.escape(str(r.get("gerado_em"))) + "</p></body>")
 
 @app.on_event("startup")
 def _coletor_start():
@@ -833,6 +865,12 @@ def _coletor_start():
         _coletor.iniciar()
     except Exception as e:
         print("[coletor] falha ao iniciar:", e, flush=True)
+    # passo 3 (30/10): ficha viva + Diario em previa, no MESMO scheduler do coletor (caminho B)
+    try:
+        _enriq.iniciar(_coletor._SCHED)
+        _diario.iniciar(_coletor._SCHED)
+    except Exception as e:
+        print("[passo3] falha ao iniciar:", e, flush=True)
 
 
 # ======================= PAINEL DE LEADS DENTRO DO IDM (login do app, sem link secreto) =======================

@@ -1501,3 +1501,34 @@ def rota_diario_teste_imagem(dia: str = "", authorization: str = Header(default=
     if not r.get("ok"):
         return r
     return _diario.enviar_imagem(_diario.imagem(r), legenda="Diário comercial, teste da versão em imagem")
+
+
+# ======================= AUDITORIA DE ETIQUETAS (30/10, so leitura) =======================
+@app.get("/admin/etiquetas_auditoria")
+def admin_etiquetas_auditoria(x_idm_secret: str = Header(default=""), authorization: str = Header(default="")):
+    """Cruza as etiquetas de cada contato da CliniChat com a ficha viva (tipo, identidade, servicos da conversa).
+    So leitura: nao escreve nada no Clinic Expert."""
+    if not _admin_ok(x_idm_secret, authorization):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    convs = _cruz._lista(None, cap=3000)
+    db = _fw._get_db()
+    fichas = {}
+    for d in db.collection("escuta_leads").stream():
+        x = d.to_dict() or {}
+        ia = x.get("ia") or {}
+        fichas[d.id] = {"tipo": x.get("tipo_contato"), "ident": x.get("identidade"), "serv": ia.get("servicos") or [],
+                        "cir": ia.get("cirurgias_origem") or [], "orig": x.get("origem_codigo"), "sit": x.get("situacao_crm")}
+    linhas, seen = [], set()
+    for c in convs:
+        ct = c.get("contact") or {}
+        f = _cruz._fone(ct.get("phone") or c.get("identifier"))
+        k = f or str(c.get("id"))
+        if k in seen:
+            continue
+        seen.add(k)
+        tags = [t.get("label") for t in (ct.get("tags") or []) if isinstance(t, dict)]
+        fx = fichas.get(f) or {}
+        linhas.append({"nome": ct.get("name"), "fone": f, "ext": ct.get("externalId"), "ctype": ct.get("type"),
+                       "tags": tags, "tipo": fx.get("tipo"), "ident": fx.get("ident") or _cruz.classifica_identidade(f, ct.get("name")),
+                       "serv": fx.get("serv"), "cir": fx.get("cir"), "orig": fx.get("orig"), "sit": fx.get("sit")})
+    return {"ok": True, "contatos": len(linhas), "linhas": linhas}

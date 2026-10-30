@@ -873,6 +873,18 @@ app.include_router(_coletor.router)
 _coletor.registrar_extra("tintim_webhook", lambda: {"configurado": bool(TINTIM_WEBHOOK_KEY), **_TT_STATS})
 import enriquecedor as _enriq
 import diario as _diario
+import cadencia as _cadencia
+_coletor.registrar_extra("cadencia", lambda: dict(_cadencia.ST))
+
+@app.post("/cadencia/rodar")
+def rota_cadencia_rodar(enviar: bool = False, authorization: str = Header(default=""), x_idm_secret: str = Header(default="")):
+    # gera/confere a cadencia de hoje (e, se enviar=true, manda o WhatsApp das atendentes) - master/segredo
+    if not _admin_ok(x_idm_secret, authorization):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    r = _cadencia.rodar()
+    if enviar:
+        r["envios"] = {k: {"ok": v.get("ok"), "erro": v.get("erro")} for k, v in _cadencia.enviar_atendentes().items()}
+    return r
 _coletor.registrar_extra("ficha_viva", lambda: dict(_enriq.ST))
 
 def _admin_ok(x_idm_secret: str, authorization: str) -> bool:
@@ -953,6 +965,7 @@ def _coletor_start():
     try:
         _enriq.iniciar(_coletor._SCHED)
         _diario.iniciar(_coletor._SCHED)
+        _cadencia.iniciar(_coletor._SCHED)
     except Exception as e:
         print("[passo3] falha ao iniciar:", e, flush=True)
 

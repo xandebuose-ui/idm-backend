@@ -151,6 +151,24 @@ def gerar(dia=None, gravar=True):
     L.append("• Nas chegadas de ontem: cidade/bairro não perguntados %d · origem não perguntada %d" % (len(cid_d), len(ori_d)))
     L.append("• Oportunidades de lead SEM tarefa no CRM: *%d*" % len(sem_tarefa) + (" — " + nomes(sem_tarefa, 6) if sem_tarefa else ""))
     L.append("• Base ativa: cidade não perguntada %d · origem não perguntada %d" % (len(cidade), len(origem_np)))
+    try:
+        _hoje = _sp_now().date().isoformat()
+        _cd = db.collection("escuta_cadencia").document(_hoje).get()
+        _co = db.collection("escuta_cadencia").document(d).get()
+        if _cd.exists or _co.exists:
+            L.append("")
+            L.append("*📌 Cadência — leads sem próximo passo no CRM*")
+            if _cd.exists:
+                _pd = (_cd.to_dict() or {}).get("por_dono") or {}
+                L.append("• Hoje: " + (" · ".join("%s %d" % (k.split()[0], v) for k, v in sorted(_pd.items(), key=lambda x: -x[1])) or "nenhum"))
+            if _co.exists:
+                _cf = ((_co.to_dict() or {}).get("conferencia") or {})
+                if _cf.get("total"):
+                    L.append("• Ontem resolvidos: %d de %d" % (_cf.get("resolvidos", 0), _cf["total"]) +
+                             " (" + " · ".join("%s %d/%d" % (k.split()[0], v["resolvidos"], v["total"]) for k, v in (_cf.get("por_dono") or {}).items()) + ")" +
+                             (" · %d com tarefa SEM descrição" % _cf["sem_descricao"] if _cf.get("sem_descricao") else ""))
+    except Exception as _ex:
+        print("[diario] cadencia:", _ex, flush=True)
     if fora:
         _cf = Counter(l.get("tipo_contato") for l in fora if l.get("data_chegada_sp") == d)
         if _cf:
@@ -194,6 +212,7 @@ def iniciar(sched):
     if sched is None or os.environ.get("DIARIO_ON", "1") == "0":
         return
     sched.add_job(lambda: gerar_e_enviar(), "cron", hour=6, minute=45)
+    sched.add_job(lembrete_janela, "cron", hour=20, minute=0)
     print("[diario] agendado 06h45 (gera + envia pelo CliniChat=%s)" % DIARIO_ENVIO, flush=True)
 
 
@@ -304,3 +323,18 @@ def gerar_e_enviar():
             pass
         ENVIO["dia"] = r["dia"]
     return r
+
+
+def lembrete_janela():
+    """20h: se o Xandao nao respondeu desde o Diario das 06h45, lembra de responder (mantem a janela de 24h)."""
+    db = _fw._get_db()
+    if not db:
+        return {"ok": False}
+    f = db.collection("escuta_conversas").document(_norm(DIARIO_FONE)).get()
+    v = f.to_dict() or {} if f.exists else {}
+    corte = (_sp_now().replace(hour=6, minute=40, second=0, microsecond=0) + dt.timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%S")
+    respondeu = v.get("ultima_msg_de") == "lead" and str(v.get("ultima_msg_em") or "") >= corte
+    if respondeu:
+        return {"ok": True, "lembrete": False}
+    r = enviar("🔔 Jarbas: responda *ok* aqui para o Diário de amanhã chegar (o WhatsApp só deixa enviar se você falou com este número nas últimas 24h).")
+    return {"ok": r.get("ok"), "lembrete": True, "erro": r.get("erro")}

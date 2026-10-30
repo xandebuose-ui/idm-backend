@@ -329,6 +329,34 @@ def _multipart(campos, arq_nome, arq_bytes, mime):
 
 ENVIO_IMG = {"ultimo_em": None, "ok": None, "erro": None, "etapa": None}
 
+_CE_UID = {"id": None, "tentou": []}
+
+def _ce_user_id(app):
+    """id do usuario no CE (dono do app_jwt). O 'sub' do cracha da CliniChat NAO serve (422 user_id)."""
+    if os.environ.get("CE_USER_ID"):
+        return os.environ["CE_USER_ID"]
+    if _CE_UID["id"]:
+        return _CE_UID["id"]
+    import motor_cruzamento as _cruz
+    for path in ("/api/auth/user", "/api/auth/me", "/api/me", "/api/user", "/api/users/me"):
+        rq = _ur.Request(_cruz.INTERNAL + path, headers={"Authorization": "Bearer " + app, "User-Agent": UA, "Accept": "application/json"})
+        try:
+            with _ur.urlopen(rq, timeout=20) as resp:
+                d = json.loads(resp.read().decode("utf-8", "ignore") or "{}")
+        except Exception as e:
+            _CE_UID["tentou"].append("%s:%s" % (path, getattr(e, "code", repr(e)[:30])))
+            continue
+        for cand in ((d.get("user") or {}).get("id") if isinstance(d.get("user"), dict) else None,
+                     ((d.get("data") or {}).get("user") or {}).get("id") if isinstance(d.get("data"), dict) and isinstance((d.get("data") or {}).get("user"), dict) else None,
+                     (d.get("data") or {}).get("id") if isinstance(d.get("data"), dict) else None,
+                     d.get("id")):
+            if cand:
+                _CE_UID["id"] = str(cand)
+                _CE_UID["tentou"].append("%s:ok" % path)
+                return _CE_UID["id"]
+        _CE_UID["tentou"].append("%s:sem id (%s)" % (path, ",".join(list(d.keys())[:6])))
+    return None
+
 def enviar_imagem(png, fone=None, legenda=""):
     """Mesmo caminho do app do CE: 1) POST api/file/upload (app_jwt, fileable clini_chat)
     2) POST clinichat /message/send type image com fileData/filePath/fileMeta."""
@@ -350,8 +378,13 @@ def enviar_imagem(png, fone=None, legenda=""):
     if not cid:
         ENVIO_IMG.update({"erro": "conversa nao encontrada"}); return dict(ENVIO_IMG)
     nome = "diario-%s.png" % _sp_now().strftime("%Y%m%d-%H%M")
-    b, corpo = _multipart({"fileable_type": "clini_chat", "fileable_group": "clini_chat", "fileable_id": clinic,
-                           "permanent": "false", "clinic_id": clinic, "user_id": uid}, nome, png, "image/png")
+    campos = {"fileable_type": "clini_chat", "fileable_group": "clini_chat", "fileable_id": clinic,
+              "permanent": "false", "clinic_id": clinic}
+    ce_uid = _ce_user_id(app)
+    if ce_uid:
+        campos["user_id"] = ce_uid
+    ENVIO_IMG["ce_user"] = {"id": ce_uid, "tentou": _CE_UID["tentou"][-6:]}
+    b, corpo = _multipart(campos, nome, png, "image/png")
     ENVIO_IMG["etapa"] = "upload"
     rq = _ur.Request(_cruz.INTERNAL + "/api/file/upload", data=corpo, method="POST", headers={
         "Authorization": "Bearer " + app, "User-Agent": UA, "Accept": "application/json",

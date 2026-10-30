@@ -27,7 +27,7 @@ COLL_TT = os.environ.get("ESCUTA_TINTIM_COLL", "escuta_tintim")
 IA_MODEL = os.environ.get("ENRIQ_MODEL", os.environ.get("JARBAS_TEMP_MODEL", "claude-haiku-5-5"))
 IA_ON = os.environ.get("ENRIQ_IA", "1") == "1"
 IA_LOTE = int(os.environ.get("ENRIQ_IA_LOTE", "60"))      # max analises de IA por rodada
-VERSAO_REGUA = "v0-rascunho-30/10"
+VERSAO_REGUA = "v0.1-rascunho-30/10"
 
 ST = {"ultima": None, "ok": None, "erro": None, "fichas": 0, "gravadas": 0, "ia_feitas": 0,
       "ia_erros": 0, "ia_pendentes": 0, "rodando": False, "duracao_s": None}
@@ -76,6 +76,9 @@ _ENC_PAL = (r"(ok+|okay|obrigad[ao]s?|muito obrigad[ao]|obg|brigad[ao]|blz|belez
             r"tudo bem|de nada|igualmente|am[eé]m|boa noite|bom dia|boa tarde|valeu|vlw|tchau|at[eé] (mais|logo|amanh[aã])|"
             r"[\U0001F44D\U0001F64F\u2764\uFE0F\U0001F60A\U0001F970\U0001F618\U0001F44F\U0001F917\U0001F49A\U0001F49C]+)")
 _ENCERRA = re.compile(r"^[\s\W]*(" + _ENC_PAL + r"[\s!.,;\W]*)+$", re.I)
+_DECL_LABEL = {"instagram": "Orgânico · Direct/Instagram", "anuncio": "Tráfego pago", "google": "Orgânico · Google",
+               "site": "Orgânico · Site", "indicacao_paciente": "Indicação · paciente", "indicacao_cirurgiao": "Indicação · cirurgião",
+               "indicacao_outro": "Indicação"}
 _LABEL_ORIGEM = {"trafego_pago": "Tráfego pago", "organico_bio": "Orgânico · Bio", "organico_instagram": "Orgânico · Direct/Instagram",
                  "organico_site": "Orgânico · Site", "organico_google": "Orgânico · Google",
                  "relacionamento_indicacao": "Indicação", "nao_informada": "Origem não informada"}
@@ -233,8 +236,11 @@ CIRURGIAS = ["abdominoplastia", "lipoaspiracao", "lipo_hd_lipoescultura", "mamop
              "cirurgia_combinada_mommy_makeover", "bariatrica_ou_pos_bariatrica", "outra", "nao_mencionada"]
 INTENCOES = ["quer_preco", "quer_agendar", "duvida_tratamento", "logistica_de_cliente", "reclamacao_insatisfacao",
              "fornecedor_parceiro_ruido", "interno_ou_engano", "outro"]
-MOMENTOS = ["pediu_preco", "objecao_preco", "pediu_agendamento", "agendou_avaliacao", "sumiu_apos_preco",
-            "informou_data_cirurgia", "informou_cirurgiao", "reclamacao", "pediu_desconto", "comparou_concorrente"]
+MOMENTOS = ["pediu_preco", "objecao_preco", "pediu_agendamento", "agendou_avaliacao", "agendou_sessao", "remarcou_ou_cancelou",
+            "sumiu_apos_preco", "informou_data_cirurgia", "informou_cirurgiao", "informou_origem", "reclamacao",
+            "pediu_desconto", "comparou_concorrente"]
+ORIGENS_DECL = ["instagram", "anuncio", "google", "site", "indicacao_paciente", "indicacao_cirurgiao", "indicacao_outro",
+                "ja_e_cliente", "nao_declarou"]
 FALHAS = ["nao_perguntou_cidade_bairro", "passou_preco_fechado", "nao_conduziu_para_avaliacao", "demorou_a_responder",
           "nao_retomou_lead_parado", "tom_frio_ou_robotico", "nao_perguntou_origem", "informacao_incorreta", "nenhuma"]
 
@@ -244,23 +250,53 @@ _SCHEMA = {"type": "object", "properties": {
     "intencao": {"type": "string", "enum": INTENCOES},
     "momentos": {"type": "array", "items": {"type": "object", "properties": {
         "tipo": {"type": "string", "enum": MOMENTOS}, "trecho": {"type": "string"}}, "required": ["tipo"]}},
-    "abordagem_nota": {"type": "string", "enum": ["correta", "com_falhas", "sem_dados"]},
+    "abordagem_nota": {"type": "string", "enum": ["correta", "com_falhas", "sem_dados", "nao_se_aplica"]},
+    "origem_declarada": {"type": "string", "enum": ORIGENS_DECL},
     "abordagem_falhas": {"type": "array", "items": {"type": "string", "enum": FALHAS}},
     "resumo": {"type": "string"}},
-    "required": ["servicos", "cirurgias_origem", "intencao", "momentos", "abordagem_nota", "abordagem_falhas", "resumo"]}
+    "required": ["servicos", "cirurgias_origem", "intencao", "momentos", "abordagem_nota", "abordagem_falhas",
+                 "origem_declarada", "resumo"]}
 
 _SYSTEM = ("Voce le conversas de WhatsApp do Instituto Dayane Mafra (Barueri/Alphaville), clinica de PRE e POS-OPERATORIO de "
-           "cirurgia plastica e estetica. O Instituto NAO opera: o cirurgiao opera; o Instituto faz o pre/pos (drenagem, etc.). "
-           "Por isso separe: 'servicos' = o que a pessoa quer/usa DO INSTITUTO; 'cirurgias_origem' = a cirurgia plastica que ela fez "
-           "ou vai fazer (so marque se a conversa disser; senao 'nao_mencionada').\n"
-           "REGUA DE ABORDAGEM (rascunho %s) - avalie SO o atendimento humano da equipe (ignore mensagens automaticas):\n"
-           "1) perguntar cidade/bairro logo no inicio (2a mensagem); 2) perguntar como conheceu o Instituto (origem);\n"
-           "3) preco: passar a MEDIA de valores e dizer que a Avaliacao define o valor final - NUNCA preco fechado;\n"
-           "4) proximo passo e sempre a AVALIACAO (presencial ou online); 5) responder rapido e retomar lead parado;\n"
-           "6) tom acolhedor, humano, sem parecer robo. Se a equipe quase nao falou, use 'sem_dados'.\n"
-           "'momentos': marque os momentos-chave com um trecho CURTO (ate 12 palavras) da conversa. "
-           "'resumo': 2 a 3 frases objetivas sobre quem e a pessoa, o que quer e em que pe esta. "
-           "Nunca invente: se nao estiver na conversa, nao marque. Voce NAO decide se houve venda.") % VERSAO_REGUA
+           "cirurgia plastica e estetica. O Instituto NAO opera: o cirurgiao opera; o Instituto faz o pre/pos (drenagem etc.). "
+           "'servicos' = o que a pessoa quer/usa DO INSTITUTO; 'cirurgias_origem' = a cirurgia plastica que ela fez ou vai fazer "
+           "(so se a conversa disser; senao 'nao_mencionada').\n"
+           "REGUA DE ABORDAGEM (%s) - vale SO para captacao de LEAD (pessoa que ainda nao e cliente ou cliente pedindo algo NOVO):\n"
+           "1) perguntar cidade/bairro logo no inicio; 2) perguntar como conheceu o Instituto;\n"
+           "3) preco: passar FAIXA/MEDIA de valores e dizer que a Avaliacao define o valor final. Dar faixa (ex.: R$1.100 a 1.600) "
+           "e CORRETO. 'passou_preco_fechado' so quando deu UM valor unico de pacote/tratamento para lead sem avaliacao;\n"
+           "4) proximo passo e a AVALIACAO (presencial ou online); 5) responder rapido e retomar lead parado; 6) tom acolhedor e humano.\n"
+           "Se a IDENTIDADE informada for 'cliente' e a conversa for logistica do que ela ja tem (agendar/remarcar sessao, duvida do "
+           "tratamento em curso), use abordagem_nota='nao_se_aplica' e abordagem_falhas=['nenhuma'] - a regua de captacao NAO se aplica. "
+           "Ignore mensagens automaticas. Se a equipe quase nao falou, use 'sem_dados'.\n"
+           "MOMENTOS (com trecho CURTO, ate 12 palavras, copiado da conversa) - seja ESTRITO:\n"
+           "- agendou_avaliacao: SO a AVALIACAO inicial (consulta); marcar/confirmar SESSAO e 'agendou_sessao'; desmarcar/remarcar e 'remarcou_ou_cancelou';\n"
+           "- informou_data_cirurgia: SO quando cita a data da cirurgia plastica;\n"
+           "- sumiu_apos_preco: SO se a equipe passou valor e o lead nao respondeu mais nada depois;\n"
+           "- informou_origem: quando o lead diz como conheceu (Instagram, anuncio, indicacao de fulano...).\n"
+           "'origem_declarada': como a pessoa DISSE que conheceu o Instituto em QUALQUER ponto da conversa; 'ja_e_cliente' se ja era "
+           "paciente; 'nao_declarou' se nao disse.\n"
+           "'resumo': 2 a 3 frases objetivas (quem e, o que quer, em que pe esta). Campos de lista sao listas JSON; campos de texto sao "
+           "texto simples (nunca coloque colchetes ou aspas em volta). Nunca invente. Voce NAO decide se houve venda.") % VERSAO_REGUA
+
+def _norm_val(v):
+    """O modelo as vezes devolve '["x"]' ou '"x"' como texto: desembrulha."""
+    if isinstance(v, str):
+        t = v.strip()
+        if (t.startswith("[") and t.endswith("]")) or (t.startswith('"') and t.endswith('"')):
+            try:
+                return _norm_val(json.loads(t))
+            except Exception:
+                return t.strip('"[] ')
+    if isinstance(v, list):
+        return [_norm_val(x) for x in v]
+    return v
+
+def _um(v):
+    v = _norm_val(v)
+    if isinstance(v, list):
+        return v[0] if v else None
+    return v
 
 def _linha(m):
     who = "Lead" if m.get("de") == "lead" else ("Equipe" if m.get("de") == "equipe" else "Sistema")
@@ -276,9 +312,10 @@ def _linha(m):
     d = m.get("_dt")
     return "%s %s: %s" % ((d - dt.timedelta(hours=3)).strftime("%d/%m %H:%M") if d else "", who, t[:600])
 
-def _ia(fk, msgs, anterior):
+def _ia(fk, msgs, anterior, identidade="novo"):
     import jarbas as _j
-    ate_ant = _parse((anterior or {}).get("ia_ate"))
+    mesma_regua = ((anterior or {}).get("ia") or {}).get("regua") == VERSAO_REGUA
+    ate_ant = _parse((anterior or {}).get("ia_ate")) if mesma_regua else None   # regua nova = le de novo inteiro
     novos = [m for m in msgs if m.get("_dt") and (ate_ant is None or m["_dt"] > ate_ant)]
     linhas = [l for l in (_linha(m) for m in (novos if ate_ant else msgs)[-120:]) if l]
     if not linhas:
@@ -289,9 +326,22 @@ def _ia(fk, msgs, anterior):
         ctx = ("ANALISE ANTERIOR (atualize com as mensagens novas; mantenha o que continua valendo):\n" +
                json.dumps({k: a.get(k) for k in ("servicos", "cirurgias_origem", "intencao", "momentos",
                                                    "abordagem_nota", "abordagem_falhas", "resumo")}, ensure_ascii=False) + "\n\n")
-    user = ctx + ("MENSAGENS NOVAS:\n" if ctx else "CONVERSA:\n") + "\n".join(linhas)[:24000]
+    user = ("IDENTIDADE (dado do CRM/vendas): %s\n\n" % identidade) + ctx + ("MENSAGENS NOVAS:\n" if ctx else "CONVERSA:\n") + "\n".join(linhas)[:24000]
     r = _j._struct_call(IA_MODEL, _SYSTEM, user, _SCHEMA, "categorias", 900, timeout=60)
-    ia = {k: r.get(k) for k in _SCHEMA["properties"]}
+    ia = {k: _norm_val(r.get(k)) for k in _SCHEMA["properties"]}
+    for k in ("intencao", "abordagem_nota", "origem_declarada", "resumo"):
+        ia[k] = _um(ia.get(k))
+    def _flat(v):
+        out = []
+        for x in (v if isinstance(v, list) else [v]):
+            if isinstance(x, list):
+                out += _flat(x)
+            elif isinstance(x, str) and x:
+                out.append(x)
+        return out
+    for k in ("servicos", "cirurgias_origem", "abordagem_falhas"):
+        ia[k] = _flat(ia.get(k))
+    ia["momentos"] = [m for m in (ia.get("momentos") or []) if isinstance(m, dict) and m.get("tipo")]
     ia["status"] = "rascunho"
     ia["regua"] = VERSAO_REGUA
     ia["modelo"] = IA_MODEL
@@ -315,7 +365,8 @@ def rodar(motivo="poll", so_mudadas=True, com_ia=True):
         for fk, ficha in fichas.items():
             ant = atuais.get(fk) or {}
             mudou_msg = (ant.get("ultima_msg_em") != ficha.get("ultima_msg_em")) or not ant
-            precisa_ia = com_ia and IA_ON and ant.get("ia_ate") != ficha.get("ultima_msg_em")
+            precisa_ia = com_ia and IA_ON and (ant.get("ia_ate") != ficha.get("ultima_msg_em")
+                                              or (ant.get("ia") and (ant.get("ia") or {}).get("regua") != VERSAO_REGUA))
             if so_mudadas and not mudou_msg and not precisa_ia and motivo not in ("completo",):
                 continue
             msgs = _msgs(db, fk)
@@ -327,7 +378,7 @@ def rodar(motivo="poll", so_mudadas=True, com_ia=True):
             elif precisa_ia:
                 if ia_feitas + ia_erros < IA_LOTE:
                     try:
-                        res = _ia(fk, msgs, ant)
+                        res = _ia(fk, msgs, ant, doc["identidade"])
                         if res:
                             doc["ia"], doc["ia_ate"] = res[0], ficha.get("ultima_msg_em")
                             doc["ia_em"] = _iso(_utc())
@@ -338,6 +389,12 @@ def rodar(motivo="poll", so_mudadas=True, com_ia=True):
                     time.sleep(0.3)
                 else:
                     ia_pend += 1
+            _od = ((doc.get("ia") or ant.get("ia") or {}).get("origem_declarada"))
+            if doc.get("origem_codigo") == "nao_informada" and _od and _od not in ("nao_declarou", "ja_e_cliente"):
+                doc["origem"] = _DECL_LABEL.get(_od, _od) + " (declarada na conversa)"
+                doc["origem_fonte"] = "declarada"
+            else:
+                doc["origem_fonte"] = "primeira_mensagem"
             db.collection(COLL_LEADS).document(fk).set(doc, merge=True)
             grav += 1
         ST.update({"ultima": _iso(_utc()), "ok": True, "fichas": len(fichas), "gravadas": grav, "ia_feitas": ia_feitas,

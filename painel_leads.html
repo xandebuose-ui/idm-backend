@@ -130,13 +130,33 @@ footer{margin:28px 0 14px;font-size:.76rem;color:var(--muted);text-align:center}
 </aside>
 <script>
 const base=location.pathname.replace(/\/leads\/?$/,'');
+// Modo app (dentro do IDM, 30/10): dados via /api/leads com o login do app (Firebase ID token por postMessage).
+// Modo link (/p/{token}/leads): igual a antes.
+const APPMODE=!!window.IDM_APP, API=APPMODE?'/api/leads':base;
+let _tok=null,_tokT=0,_esp=[];
+window.addEventListener('message',e=>{if(!APPMODE||e.origin!==window.IDM_ORIGIN)return;
+  if(e.data&&e.data.t==='idm-token'){_tok=e.data.token;_tokT=Date.now();_esp.splice(0).forEach(f=>f(_tok));}});
+function pedeToken(forca){return new Promise(res=>{
+  if(!forca&&_tok&&Date.now()-_tokT<40*60e3)return res(_tok);
+  _esp.push(res);try{parent.postMessage({t:'idm-token-req'},window.IDM_ORIGIN);}catch(e){}
+  setTimeout(()=>{const i=_esp.indexOf(res);if(i>=0){_esp.splice(i,1);res(null);}},8000);});}
+async function api(path,opt){opt=opt||{};
+  if(!APPMODE)return fetch(API+path,opt);
+  let t=await pedeToken(false);
+  if(!t){semLogin();throw new Error('sem login');}
+  let r=await fetch(API+path,Object.assign({},opt,{headers:Object.assign({},opt.headers||{},{Authorization:'Bearer '+t})}));
+  if(r.status===401){t=await pedeToken(true);if(!t){semLogin();throw new Error('sem login');}
+    r=await fetch(API+path,Object.assign({},opt,{headers:Object.assign({},opt.headers||{},{Authorization:'Bearer '+t})}));}
+  if(r.status===401||r.status===403){semLogin(r.status);throw new Error('acesso');}
+  return r;}
+function semLogin(st){const u=document.getElementById('upd');if(u)u.textContent=(st===403?'Seu usuário não tem acesso ao Painel de Leads.':'Faça login no app IDM para ver o painel.');}
 const E=id=>document.getElementById(id);
 const esc=s=>(s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const LABEL={quente:'🔥 Quente',morno:'🌤️ Morno',frio:'❄️ Frio',cross_sell:'💰 Cross-sell',operacional:'⚙️ Operacional',revisar:'🔁 Revisar'};
 let DATA={};
 async function carrega(){
   try{
-    const r=await fetch(base+'/termometro.json',{cache:'no-store'}).then(r=>r.json());
+    const r=await api('/termometro.json',{cache:'no-store'}).then(r=>r.json());
     const x=r.result||{};DATA=x;const c=x.contagem||{};
     E('n_quente').textContent=c.quente||0;E('n_morno').textContent=c.morno||0;E('n_frio').textContent=c.frio||0;E('n_cross').textContent=c.cross_sell||0;
     E('n_op').textContent=c.operacional||0;E('n_rev').textContent=c.revisar||0;
@@ -171,7 +191,7 @@ async function openLead(key,i){
     '<div class="jar"><div class="jh"><span class=av>J</span> Análise do Jarbas · super-vendedor</div><div class="jbody"><div class=load>Jarbas lendo a conversa real…</div></div></div>';
   E('dbody').scrollTop=0;
   try{
-    const a=await fetch(base+'/analise?conv_id='+encodeURIComponent(l.conv)+'&nome='+encodeURIComponent(l.nome||'')+'&identidade='+encodeURIComponent(l.identidade||'')+'&telefone='+encodeURIComponent(l.telefone||''),{cache:'no-store'}).then(r=>r.json());
+    const a=await api('/analise?conv_id='+encodeURIComponent(l.conv)+'&nome='+encodeURIComponent(l.nome||'')+'&identidade='+encodeURIComponent(l.identidade||'')+'&telefone='+encodeURIComponent(l.telefone||''),{cache:'no-store'}).then(r=>r.json());
     const jb=document.querySelector('.jar .jbody');
     if(!a.ok){jb.innerHTML='<div class=load>Sem análise: '+esc(a.motivo||'erro')+'</div>';return;}
     window._msg=a.mensagem||'';
@@ -194,7 +214,7 @@ async function openLead(key,i){
 }
 async function tratar(conv,lt){
   if(!confirm('Confirmar que este lead já foi TRATADO? Se não houver ação na conversa, ele volta ao painel sinalizado.'))return;
-  try{await fetch(base+'/tratar?conv_id='+encodeURIComponent(conv)+'&lt='+encodeURIComponent(lt||''),{method:'POST'});}catch(e){}
+  try{await api('/tratar?conv_id='+encodeURIComponent(conv)+'&lt='+encodeURIComponent(lt||''),{method:'POST'});}catch(e){}
   closeDrawer();carrega();
 }
 function cp(){navigator.clipboard.writeText(window._msg||'').then(()=>{const b=document.querySelector('.cp');if(b){b.textContent='✓ Copiado';setTimeout(()=>b.textContent='📋 Copiar mensagem',1500);}});}

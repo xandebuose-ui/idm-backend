@@ -833,3 +833,80 @@ def _coletor_start():
         _coletor.iniciar()
     except Exception as e:
         print("[coletor] falha ao iniciar:", e, flush=True)
+
+
+# ======================= PAINEL DE LEADS DENTRO DO IDM (login do app, sem link secreto) =======================
+# 30/10/2026. ADITIVO. O painel continua sendo o MESMO arquivo (painel_leads.html); em /app/leads ele roda
+# dentro de um iframe do app IDM (Netlify) e recebe o Firebase ID token do app por postMessage.
+# As rotas /api/leads/* conferem o token + a funcao do usuario (users/{uid}) e reusam as mesmas funcoes
+# do painel por token (/p/{token}/...), entao o comportamento e identico.
+import json
+IDM_ORIGIN = os.environ.get("IDM_APP_ORIGIN", "https://instituto-mafra-sistema.netlify.app")
+_LEADS_ROLES = [r.strip() for r in os.environ.get("LEADS_ROLES", "gestao,comercial,social_seller,avaliadora").split(",") if r.strip()]
+_USR_CACHE = {}
+
+def _usuario_leads(authorization: str):
+    """Valida o Firebase ID token e a funcao do usuario. Retorna (uid, perfil) ou levanta 401/403."""
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="login necessario")
+    tok = authorization[7:].strip()
+    try:
+        from firebase_admin import auth as _fbauth
+        db = _fw._get_db()  # garante o app firebase inicializado
+        dec = _fbauth.verify_id_token(tok)
+    except Exception:
+        raise HTTPException(status_code=401, detail="login invalido ou expirado")
+    uid = dec.get("uid")
+    import time as _tu
+    c = _USR_CACHE.get(uid)
+    if c and _tu.time() - c[0] < 300:
+        perfil = c[1]
+    else:
+        perfil = {}
+        try:
+            d = db.collection("users").document(uid).get() if db else None
+            perfil = (d.to_dict() or {}) if (d is not None and d.exists) else {}
+        except Exception:
+            perfil = {}
+        _USR_CACHE[uid] = (_tu.time(), perfil)
+    ok = perfil.get("master") is True or perfil.get("role") in _LEADS_ROLES or perfil.get("acessoComercial") is True
+    if not ok:
+        raise HTTPException(status_code=403, detail="seu usuario nao tem acesso ao painel de leads")
+    return uid, perfil
+
+@app.get("/app/leads", response_class=HTMLResponse)
+def app_leads():
+    # Casca do painel para o iframe do IDM. Sem dado nenhum: os dados so vem pelas /api/leads/* com login.
+    import os as _os
+    _p = _os.path.join(_os.path.dirname(__file__), "painel_leads.html")
+    with open(_p, encoding="utf-8") as _f:
+        html_ = _f.read()
+    inj = '<script>window.IDM_APP=1;window.IDM_ORIGIN=%s;</script>' % json.dumps(IDM_ORIGIN)
+    html_ = html_.replace("<head>", "<head>" + inj, 1) if "<head>" in html_ else inj + html_
+    return HTMLResponse(html_, headers={"Content-Security-Policy": "frame-ancestors " + IDM_ORIGIN,
+                                        "Cache-Control": "no-store"})
+
+@app.get("/api/leads/termometro.json")
+def api_leads_termometro(authorization: str = Header(default="")):
+    _usuario_leads(authorization)
+    _maybe_tick()
+    return {"ok": True, "quando": _TERM["quando"], "result": _TERM["result"]}
+
+@app.get("/api/leads/analise")
+def api_leads_analise(conv_id: str, nome: str = "", temperatura: str = "", identidade: str = "",
+                      telefone: str = "", authorization: str = Header(default="")):
+    _usuario_leads(authorization)
+    return painel_analise(PANEL_TOKEN, conv_id, nome, temperatura, identidade, telefone)
+
+@app.post("/api/leads/tratar")
+def api_leads_tratar(conv_id: str, lt: str = "", desfazer: bool = False, authorization: str = Header(default="")):
+    uid, perfil = _usuario_leads(authorization)
+    r = painel_tratar(PANEL_TOKEN, conv_id, lt, desfazer)
+    try:  # registra QUEM marcou (auditoria da conduta)
+        db = _fw._get_db()
+        if db and not desfazer:
+            db.collection("escuta_tratados").document(str(conv_id)).set(
+                {"por_uid": uid, "por_nome": perfil.get("name")}, merge=True)
+    except Exception:
+        pass
+    return r

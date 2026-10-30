@@ -1370,7 +1370,13 @@ def admin_proximo_passo(fone: str = "", x_idm_secret: str = Header(default=""), 
         raise HTTPException(status_code=401, detail="unauthorized")
     f = _cruz._fone(fone) if fone else ""
     out = {"radar": _RADAR, "agenda": {"n": _cruz._AGENDA.get("n"), "fones": len(_cruz._AGENDA.get("fones") or {}),
-                                        "erro": _cruz._AGENDA.get("erro")}, "indice_fones": len(_cruz._OPP_POR_FONE)}
+                                        "erro": _cruz._AGENDA.get("erro"), "meta": _cruz._AGENDA.get("meta"),
+                                        "paginas": _cruz._AGENDA.get("paginas")},
+           "indice_fones": len(_cruz._OPP_POR_FONE),
+           "termometro": {"quando": _TERM.get("quando"), "erro": _TERM.get("erro"), "erro_em": _TERM.get("erro_em"),
+                          "tb": _TERM.get("erro_tb"), "travado": _term_lock.locked(), "ultimo_tick": _LAST_TICK.get("term")},
+           "cruzamento": {"quando": _last_cruz.get("quando"), "erro": _last_cruz.get("erro"), "travado": _cruz_lock.locked(),
+                          "universo": len(((_last_cruz.get("result") or {}).get("universo")) or [])}}
     if f:
         out["fone"] = f
         out["proximo_passo"] = _cruz.proximo_passo(f)

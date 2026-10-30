@@ -113,7 +113,20 @@ def agenda_cached(ttl=600):
         sp = dt.datetime.utcnow() - dt.timedelta(hours=3)
         ini = sp.strftime("%Y-%m-%dT%H:%M:00-03:00")
         fim = (sp + dt.timedelta(days=60)).strftime("%Y-%m-%dT23:59:59-03:00")
-        bs = mf.api_all("bookings?starts_at=%s&ends_at=%s&per_page=100" % (ini, fim), cap_pages=80)
+        # paginacao propria: o api_all para na 1a pagina quando o meta nao traz last_page (so 'of')
+        bs, pg, meta = [], 1, {}
+        while pg <= 80:
+            d = mf.api("bookings?starts_at=%s&ends_at=%s&per_page=100&page=%d" % (ini, fim, pg)) or {}
+            data = d.get("data") or []
+            meta = d.get("meta") or {}
+            bs += data
+            tot = meta.get("of") or meta.get("total") or 0
+            last = meta.get("last_page")
+            if not data or (tot and len(bs) >= tot) or (last and pg >= last):
+                break
+            pg += 1
+        _AGENDA["meta"] = {k: meta.get(k) for k in list(meta)[:8]}
+        _AGENDA["paginas"] = pg
         out = {}
         for b in bs or []:
             st = str(b.get("status") or "").lower()

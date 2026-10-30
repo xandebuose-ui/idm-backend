@@ -981,34 +981,42 @@ def pagina_fichas(token: str, f: str = "", limite: int = 80):
     if not db:
         return HTMLResponse("sem banco")
     rows = [d.to_dict() or {} for d in db.collection("escuta_leads").stream()]
-    rows = [r for r in rows if r.get("ia") and r.get("identidade") != "sem_telefone"]
+    rows = [r for r in rows if isinstance(r.get("ia"), dict) and r.get("identidade") != "sem_telefone"]
+    def _lst(v):
+        if v is None: return []
+        if isinstance(v, (list, tuple)): return [str(x) for x in v if x is not None and not isinstance(x, dict)]
+        return [str(v)]
     if f:
         fl = f.lower()
         rows = [r for r in rows if fl in json.dumps(r.get("ia"), ensure_ascii=False).lower() or fl in (r.get("origem") or "").lower()
                 or fl in (r.get("identidade") or "")]
-    rows.sort(key=lambda r: r.get("ultima_msg_em") or "", reverse=True)
+    rows.sort(key=lambda r: str(r.get("ultima_msg_em") or ""), reverse=True)
     from collections import Counter as _C
     cs, cc, ci, cn = _C(), _C(), _C(), _C()
     for r in rows:
         ia = r["ia"]
-        cs.update(ia.get("servicos") or []); cc.update(ia.get("cirurgias_origem") or [])
-        ci.update([ia.get("intencao")]); cn.update([ia.get("abordagem_nota")])
+        cs.update(_lst(ia.get("servicos"))); cc.update(_lst(ia.get("cirurgias_origem")))
+        ci.update([str(ia.get("intencao"))]); cn.update([str(ia.get("abordagem_nota"))])
     def top(c): return " · ".join("%s <b>%d</b>" % (_h.escape(str(k)), v) for k, v in c.most_common(12))
     e = lambda x: _h.escape(str(x if x is not None else ""))
     trs = []
     for r in rows[:max(1, min(limite, 500))]:
+      try:
         ia = r["ia"]
-        mom = "; ".join("%s: “%s”" % (m.get("tipo"), (m.get("trecho") or "")[:60]) for m in (ia.get("momentos") or []))
+        _ms = ia.get("momentos") if isinstance(ia.get("momentos"), list) else []
+        mom = "; ".join(("%s: “%s”" % (m.get("tipo"), str(m.get("trecho") or "")[:60])) if isinstance(m, dict) else str(m) for m in _ms)
         trs.append("<tr><td><b>%s</b><br><small>%s · %s</small></td><td>%s</td><td>%s</td><td>%s</td><td>%s<br><small>%s</small></td>"
                    "<td><small>%s</small></td><td><small>%s</small></td><td><small>%s</small></td></tr>" % (
                        e(r.get("nome") or r.get("fone")), e(r.get("identidade")), e(r.get("origem")),
-                       e(", ".join(ia.get("servicos") or [])), e(", ".join(ia.get("cirurgias_origem") or [])), e(ia.get("intencao")),
-                       e(ia.get("abordagem_nota")), e(", ".join(x for x in (ia.get("abordagem_falhas") or []) if x != "nenhuma")),
-                       e(mom), e(ia.get("resumo")), e(", ".join(r.get("furos") or []))))
+                       e(", ".join(_lst(ia.get("servicos")))), e(", ".join(_lst(ia.get("cirurgias_origem")))), e(ia.get("intencao")),
+                       e(ia.get("abordagem_nota")), e(", ".join(x for x in _lst(ia.get("abordagem_falhas")) if x != "nenhuma")),
+                       e(mom), e(ia.get("resumo")), e(", ".join(_lst(r.get("furos"))))))
+      except Exception as _ex:
+        trs.append("<tr><td colspan=8><small>(linha com dado irregular: %s)</small></td></tr>" % e(repr(_ex)[:80]))
     page = ("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>IDM Fichas (rascunho)</title>"
             "<style>body{font-family:-apple-system,Segoe UI,sans-serif;margin:0;padding:14px;background:#f4f6f4;color:#17201c}"
             "h1{font-size:20px;margin:0 0 4px}.k{background:#fff;border-radius:10px;padding:10px 12px;margin:8px 0;font-size:13px;line-height:1.6}"
-            "table{border-collapse:collapse;width:100%;background:#fff;font-size:13px}td,th{border-bottom:1px solid #e3e7e3;padding:7px;vertical-align:top;text-align:left}"
+            "table{border-collapse:collapse;width:100%%;background:#fff;font-size:13px}td,th{border-bottom:1px solid #e3e7e3;padding:7px;vertical-align:top;text-align:left}"
             "th{background:#eef2ef;position:sticky;top:0}.wrap{overflow-x:auto}form{margin:8px 0}input{padding:7px;border:1px solid #ccd;border-radius:8px;width:240px}</style>"
             "<h1>Fichas — categorias em RASCUNHO (%d com análise)</h1>"
             "<div style='color:#5e6b64;font-size:12px'>Só leitura. Para validar a lista e a régua. Fechou/não fechou nunca vem da IA.</div>"

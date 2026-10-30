@@ -71,6 +71,11 @@ _CIDADE = re.compile(r"\b(cidade|bairro|regi[aã]o|onde (voc[eê]|vc) mora|de on
                      r"voc[eê] (mora|reside)|mora (em|perto|onde))", re.I)
 _ORIGEM_Q = re.compile(r"como (nos|n[oó]s) conheceu|onde (nos|n[oó]s) (conheceu|encontrou|achou)|como (ficou sabendo|chegou at)|"
                        r"quem (te |lhe )?indicou|por onde (nos|n[oó]s) conheceu|conheceu o instituto", re.I)
+# ultima mensagem do lead que so encerra a conversa (nao e furo de "sem resposta")
+_ENC_PAL = (r"(ok+|okay|obrigad[ao]s?|muito obrigad[ao]|obg|brigad[ao]|blz|beleza|t[aá]( bom)?|certo|perfeito|combinado|show|"
+            r"tudo bem|de nada|igualmente|am[eé]m|boa noite|bom dia|boa tarde|valeu|vlw|tchau|at[eé] (mais|logo|amanh[aã])|"
+            r"[\U0001F44D\U0001F64F\u2764\uFE0F\U0001F60A\U0001F970\U0001F618\U0001F44F\U0001F917\U0001F49A\U0001F49C]+)")
+_ENCERRA = re.compile(r"^[\s\W]*(" + _ENC_PAL + r"[\s!.,;\W]*)+$", re.I)
 _LABEL_ORIGEM = {"trafego_pago": "Tráfego pago", "organico_bio": "Orgânico · Bio", "organico_instagram": "Orgânico · Direct/Instagram",
                  "organico_site": "Orgânico · Site", "organico_google": "Orgânico · Google",
                  "relacionamento_indicacao": "Indicação", "nao_informada": "Origem não informada"}
@@ -182,6 +187,9 @@ def _deterministica(fk, ficha, msgs, crm, vendas, tt):
     de = ficha.get("ultima_msg_de")
     horas = round((_utc() - ult).total_seconds() / 3600.0, 1) if ult else None
     esperando = "equipe" if de == "lead" else ("lead" if de == "equipe" else None)
+    ultima_lead_txt = ((lead_msgs[-1].get("texto") or lead_msgs[-1].get("transcricao") or "") if lead_msgs else "").strip()
+    if esperando == "equipe" and ultima_lead_txt and _ENCERRA.match(ultima_lead_txt):
+        esperando = "encerrada"          # lead so agradeceu/encerrou: nao e furo
 
     furos = []
     if esperando == "equipe" and horas is not None and horas >= 2 and identidade != "sem_telefone":
@@ -204,7 +212,7 @@ def _deterministica(fk, ficha, msgs, crm, vendas, tt):
         "total_msgs": ficha.get("total_msgs"), "msgs_lead": len(lead_msgs), "msgs_equipe": len(eq), "msgs_equipe_humanas": len(eq_humano),
         "identidade": identidade, "situacao_crm": situacao_crm,
         "origem": origem, "origem_codigo": cod, "origem_tintim": t.get("fonte"), "campanha_tintim": t.get("campanha"),
-        "primeira_msg_lead": txt1[:500],
+        "primeira_msg_lead": txt1[:500], "ultima_msg_lead": ultima_lead_txt[:300],
         "conduta": {"primeira_resposta_min": t1, "perguntou_cidade": perguntou_cidade, "perguntou_origem": perguntou_origem},
         "crm": {"oportunidades": len(opps), "estagio": (principal or {}).get("estagio"), "pipeline": (principal or {}).get("pipeline"),
                 "vendedor": (principal or {}).get("vendedor"), "valor": (principal or {}).get("valor"),

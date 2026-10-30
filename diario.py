@@ -77,8 +77,9 @@ def gerar(dia=None, gravar=True):
 
     # ---- furos (estado AGORA, para cobrar hoje)
     ativos = [l for l in leads if l.get("identidade") not in ("cliente", "sem_telefone") and l.get("situacao_crm") != "perdido"]
-    sem_resp = sorted([l for l in leads if "lead_sem_resposta" in (l.get("furos") or []) and l.get("identidade") != "cliente"],
-                      key=lambda l: -(l.get("horas_desde_ultima") or 0))
+    sem_resp_all = [l for l in leads if "lead_sem_resposta" in (l.get("furos") or []) and l.get("identidade") != "cliente"]
+    sem_resp = sorted([l for l in sem_resp_all if (l.get("horas_desde_ultima") or 0) <= 48], key=lambda l: -(l.get("horas_desde_ultima") or 0))
+    sem_resp_velhos = [l for l in sem_resp_all if (l.get("horas_desde_ultima") or 0) > 48]
     sem_resp_cli = [l for l in leads if "lead_sem_resposta" in (l.get("furos") or []) and l.get("identidade") == "cliente"]
     sem_opp = [l for l in novos if "sem_oportunidade_no_crm" in (l.get("furos") or [])]
     cidade = [l for l in ativos if "cidade_nao_perguntada" in (l.get("furos") or [])]
@@ -112,7 +113,7 @@ def gerar(dia=None, gravar=True):
     L.append("• Leads: *%d*" % len(novos) + ("" if not novos else " — " + " · ".join("%s: %d" % (o, n) for o, n in por_origem.most_common())))
     L.append("• Clientes que voltaram a falar: %d" % len(clientes))
     if meta:
-        L.append("*📣 Meta Ads:* gasto %s · conversas iniciadas %d" % (_brl_reais(gasto), conv_meta) +
+        L.append("*📣 Meta Ads (%s):* gasto %s · conversas iniciadas %d" % (dd.strftime("%d/%m"), _brl_reais(gasto), conv_meta) +
                  (" · custo por lead (1ª msg de tráfego) %s" % _brl_reais(cpl) if cpl else (" · nenhum lead de tráfego pago identificado pela 1ª msg" if gasto else "")))
     else:
         L.append("*📣 Meta Ads:* sem dado do dia (coletor ainda não gravou)")
@@ -124,12 +125,16 @@ def gerar(dia=None, gravar=True):
              ("" if not itens else " — " + ", ".join("%s x%d" % (i, n) for i, n in itens.most_common(4))))
     L.append("")
     L.append("*🚨 Furos para cobrar hoje*")
-    L.append("• Leads esperando resposta da equipe: *%d*" % len(sem_resp) + (" — " + nomes(sem_resp, 5, True) if sem_resp else ""))
+    L.append("• Leads esperando resposta (até 48h — agir hoje): *%d*" % len(sem_resp) + (" — " + nomes(sem_resp, 6, True) if sem_resp else ""))
+    if sem_resp_velhos:
+        L.append("• Leads sem resposta há mais de 48h (esfriando): %d" % len(sem_resp_velhos))
     if sem_resp_cli:
         L.append("• Clientes esperando resposta: %d" % len(sem_resp_cli))
     L.append("• Leads novos de ontem sem oportunidade no CRM: *%d*" % len(sem_opp) + (" — " + nomes(sem_opp) if sem_opp else ""))
-    L.append("• Cidade/bairro não perguntados: %d · Origem não perguntada: %d" % (len(cidade), len(origem_np)))
-    L.append("• Oportunidades sem tarefa no CRM: %d" % len(sem_tarefa))
+    cid_d = [l for l in cidade if l.get("data_chegada_sp") == d]
+    ori_d = [l for l in origem_np if l.get("data_chegada_sp") == d]
+    L.append("• Nas chegadas de ontem: cidade/bairro não perguntados %d · origem não perguntada %d" % (len(cid_d), len(ori_d)))
+    L.append("• Base ativa inteira: cidade não perguntada %d · origem não perguntada %d · oportunidade sem tarefa %d" % (len(cidade), len(origem_np), len(sem_tarefa)))
     if t1_med is not None:
         L.append("• 1ª resposta (mediana ontem): %d min · %d acima de 1h" % (int(t1_med), lentos))
     L.append("")
@@ -141,7 +146,7 @@ def gerar(dia=None, gravar=True):
     dados = {"dia": d, "chegadas": len(cheg), "leads_novos": len(novos), "clientes_voltaram": len(clientes),
              "por_origem": dict(por_origem), "trafego_pago_1a_msg": trafego, "meta_gasto": gasto, "meta_conversas": conv_meta,
              "cpl": cpl, "opps_criadas": len(criadas), "opps_movimentadas": len(mexidas), "orcamentos": len(orc_d),
-             "vendas": len(ganhos_d), "sem_resposta": len(sem_resp), "sem_oportunidade": len(sem_opp),
+             "vendas": len(ganhos_d), "sem_resposta": len(sem_resp), "sem_resposta_48h_mais": len(sem_resp_velhos), "sem_oportunidade": len(sem_opp),
              "cidade_nao_perguntada": len(cidade), "origem_nao_perguntada": len(origem_np), "sem_tarefa": len(sem_tarefa),
              "t1_mediana_min": t1_med, "t1_acima_1h": lentos, "alertas": alertas}
     if gravar:

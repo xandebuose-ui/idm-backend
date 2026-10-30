@@ -60,7 +60,10 @@ def gerar(dia=None, gravar=True):
     cheg = [l for l in leads if l.get("data_chegada_sp") == d and l.get("identidade") != "sem_telefone" and (l.get("msgs_lead") or 0) > 0]
     novos = [l for l in cheg if l.get("identidade") != "cliente"]
     clientes = [l for l in cheg if l.get("identidade") == "cliente"]
-    por_origem = Counter(l.get("origem") or "Origem não informada" for l in novos)
+    def _orig(l):
+        o = l.get("origem") or "Origem não informada"
+        return "Origem não informada" if ("<" in o or "parameter" in o or len(o) > 80) else o
+    por_origem = Counter(_orig(l) for l in novos)
     trafego = sum(n for o, n in por_origem.items() if str(o).startswith("Tráfego pago"))
 
     # ---- meta

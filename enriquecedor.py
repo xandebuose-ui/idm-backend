@@ -376,7 +376,20 @@ def _ia(fk, msgs, anterior, identidade="novo"):
         return out
     for k in ("servicos", "cirurgias_origem", "abordagem_falhas"):
         ia[k] = _flat(ia.get(k))
-    ia["momentos"] = [m for m in (ia.get("momentos") or []) if isinstance(m, dict) and m.get("tipo")]
+    ia["momentos"] = [m for m in (ia.get("momentos") or []) if isinstance(m, dict) and m.get("tipo") in MOMENTOS]
+    # 30/10: o modelo as vezes vaza marcacao interna dentro do valor -> so aceita valor que esta na lista permitida
+    _ENUM = {"intencao": INTENCOES, "abordagem_nota": ["correta", "com_falhas", "sem_dados", "nao_se_aplica"],
+             "origem_declarada": ORIGENS_DECL,
+             "tipo_contato": ["lead", "cliente", "fornecedor_parceiro", "teste_interno", "equipe_interna", "spam"]}
+    for k, ok in _ENUM.items():
+        if ia.get(k) not in ok:
+            ia[k] = None
+    ia["servicos"] = [x for x in ia.get("servicos") or [] if x in SERVICOS]
+    ia["cirurgias_origem"] = [x for x in ia.get("cirurgias_origem") or [] if x in CIRURGIAS]
+    ia["abordagem_falhas"] = [x for x in ia.get("abordagem_falhas") or [] if x in FALHAS]
+    ia["criterios"] = {k: v for k, v in (ia.get("criterios") or {}).items() if v in ("sim", "nao", "nao_se_aplica")}
+    if isinstance(ia.get("resumo"), str) and "<" in ia["resumo"] and "parameter" in ia["resumo"]:
+        ia["resumo"] = ia["resumo"].split("<")[0].strip()
     ia["status"] = "valendo"
     ia["regua"] = VERSAO_REGUA
     ia["modelo"] = IA_MODEL
@@ -457,7 +470,7 @@ def rodar(motivo="poll", so_mudadas=True, com_ia=True):
                 doc["tipo_contato"] = "cliente" if doc.get("identidade") == "cliente" else "lead"
             doc.update(_nota(doc, _ia_now))
             _od = _ia_now.get("origem_declarada")
-            if doc.get("origem_codigo") == "nao_informada" and _od and _od not in ("nao_declarou", "ja_e_cliente"):
+            if doc.get("origem_codigo") == "nao_informada" and _od in _DECL_LABEL:
                 doc["origem"] = _DECL_LABEL.get(_od, _od) + " (declarada na conversa)"
                 doc["origem_fonte"] = "declarada"
             else:

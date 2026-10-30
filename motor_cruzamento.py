@@ -81,6 +81,15 @@ _FORN = re.compile(r"represent|fornecedor|parceria|cat.logo|tabela de pre|revend
 
 _MSG_CACHE = {}
 
+def _lt_conv(c):
+    # Ultima atividade REAL = data da ultima MENSAGEM (29/10/2026).
+    # lastMessageTime vem None da API; conversation.updatedAt muda por evento de ticket (abrir/fechar)
+    # e fazia lead parado parecer ativo. Fallbacks so se a ultima mensagem nao vier.
+    cv = c.get("conversation") or {}
+    lm = cv.get("lastMessage") if isinstance(cv.get("lastMessage"), dict) else {}
+    return (lm.get("createdAt") or cv.get("lastActivityTime") or c.get("lastMessageTime")
+            or cv.get("updatedAt") or c.get("updatedAt") or "")
+
 def _primeira_msg(conv_id):
     if conv_id in _MSG_CACHE:
         return _MSG_CACHE[conv_id]
@@ -417,7 +426,7 @@ def rodar_cruzamento(max_msg=130):
             buckets["cliente_operacional" if comprou else "lead_andamento"] += 1
             universo.append({"conv": c.get("conversationId"), "nome": ct.get("name"),
                              "telefone": ct.get("phone") or c.get("identifier"),
-                             "lt": c.get("lastMessageTime") or (c.get("conversation") or {}).get("updatedAt") or c.get("updatedAt") or "",
+                             "lt": _lt_conv(c),
                              "criado": (c.get("createdAt") or (c.get("conversation") or {}).get("createdAt") or "")[:10],
                              "identidade": "cliente" if comprou else "lead_cadastrado",
                              "situacao": situacao_lead(f)})
@@ -451,7 +460,7 @@ def rodar_cruzamento(max_msg=130):
             buckets[bucket] += 1
             universo.append({"conv": cid, "nome": ct.get("name"),
                              "telefone": ct.get("phone") or c.get("identifier"),
-                             "lt": c.get("lastMessageTime") or (c.get("conversation") or {}).get("updatedAt") or c.get("updatedAt") or "",
+                             "lt": _lt_conv(c),
                              "criado": (c.get("createdAt") or (c.get("conversation") or {}).get("createdAt") or "")[:10],
                              "identidade": classifica_identidade(f, ct.get("name")),
                              "situacao": "sem_opp"})

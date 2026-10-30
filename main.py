@@ -58,6 +58,10 @@ def _carregar_termometro_do_firestore():
         db = _fw._get_db()
         if not db:
             return
+        try:
+            _carregar_memoria_termometro(db)   # 30/10: memoria persistida (so reclassifica mudanca/novo)
+        except Exception as _em:
+            print("[termometro] memoria:", _em, flush=True)
         d = db.collection(os.environ.get("TERM_COLL", "escuta_termometro")).document("atual").get()
         if not d.exists:
             return
@@ -589,6 +593,38 @@ _TERM = {"result": None, "quando": None}
 _term_lock = threading.Lock()
 _TERM_CACHE = {}
 _TEMP_OVERRIDE = {}  # conv_id -> temperatura da leitura profunda (drawer); vence o batch
+_TERM_MEM = {"sujo": False, "carregado": False}
+
+def _salvar_memoria_termometro(db):
+    # 30/10: memoria do termometro no banco -> reinicio/deploy NAO zera mais; so reclassifica mudanca/novo.
+    try:
+        itens = {str(cid): {"lt": v[0][0], "ident": v[0][1], "cls": v[1]} for cid, v in _TERM_CACHE.items()}
+        db.collection(os.environ.get("TERM_COLL", "escuta_termometro")).document("memoria").set(
+            {"itens": itens, "override": {str(k): v for k, v in _TEMP_OVERRIDE.items()},
+             "salvo_em": _sp_now().isoformat(timespec="seconds")})
+        _TERM_MEM["sujo"] = False
+    except Exception as e:
+        print("[termometro] memoria save erro:", e, flush=True)
+
+def _carregar_memoria_termometro(db):
+    try:
+        d = db.collection(os.environ.get("TERM_COLL", "escuta_termometro")).document("memoria").get()
+        if not d.exists:
+            return 0
+        v = d.to_dict() or {}
+        n = 0
+        for cid, it in (v.get("itens") or {}).items():
+            if cid not in _TERM_CACHE and isinstance(it, dict) and it.get("cls"):
+                _TERM_CACHE[cid] = ((it.get("lt") or "", it.get("ident") or "novo"), it["cls"])
+                n += 1
+        for cid, t in (v.get("override") or {}).items():
+            _TEMP_OVERRIDE.setdefault(cid, t)
+        _TERM_MEM["carregado"] = True
+        print("[termometro] memoria carregada do banco: %d leads" % n, flush=True)
+        return n
+    except Exception as e:
+        print("[termometro] memoria load erro:", e, flush=True)
+        return 0
 _TEMP_MODEL = os.environ.get("JARBAS_TEMP_MODEL", "claude-haiku-5-5")
 
 def _fonte_de_leads():
@@ -701,6 +737,8 @@ def _rodar_termometro(motivo="poll"):
             db = _fw._get_db()
             if db:
                 db.collection(os.environ.get("TERM_COLL", "escuta_termometro")).document("atual").set(res)
+                if feitas or _TERM_MEM.get("sujo"):
+                    _salvar_memoria_termometro(db)
         except Exception as e:
             print("[termometro] firestore erro:", e, flush=True)
         print("[termometro] %s funil=%d ciclo=%d cache=%d univ=%d" % (contagem, funil, feitas, len(_TERM_CACHE), len(universo)), flush=True)
@@ -763,6 +801,7 @@ def painel_analise(token: str, conv_id: str, nome: str = "", temperatura: str = 
         _tp = r.get("temperatura")
         if r.get("ok") and _tp in ("quente", "morno", "frio", "cross_sell", "operacional"):
             _TEMP_OVERRIDE[conv_id] = _tp  # leitura profunda vence; reordena no proximo ciclo
+            _TERM_MEM["sujo"] = True
     return r
 
 @app.get("/p/{token}/leads", response_class=HTMLResponse)
@@ -900,7 +939,7 @@ def _coletor_start():
 # do painel por token (/p/{token}/...), entao o comportamento e identico.
 import json
 IDM_ORIGIN = os.environ.get("IDM_APP_ORIGIN", "https://instituto-mafra-sistema.netlify.app")
-_LEADS_ROLES = [r.strip() for r in os.environ.get("LEADS_ROLES", "gestao,comercial,social_seller,avaliadora").split(",") if r.strip()]
+_LEADS_ROLES = [r.strip() for r in os.environ.get("LEADS_ROLES", "gestao,comercial,social_seller,avaliadora,recepcao").split(",") if r.strip()]
 _USR_CACHE = {}
 
 def _usuario_leads(authorization: str):

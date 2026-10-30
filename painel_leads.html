@@ -177,8 +177,9 @@ async function openLead(key,i){
     window._msg=a.mensagem||'';
     const ce=a.ce||{},ops=(ce.oportunidades||[]);
     let ceHtml='';
-    if(ops.length||ce.tags||ce.annotation){
+    if(ops.length||ce.tags||ce.annotation||ce.sem_tarefa){
       ceHtml='<div class=cebox><div class=cet>Contexto Clinic Expert</div>';
+      if(ce.sem_tarefa)ceHtml+='<div class=cerow style="color:#f0a84b;font-weight:600">\u26A0\uFE0F Sem tarefa registrada no CRM \u2014 vale criar uma pro follow-up n\u00e3o cair.</div>';
       if(ops.length)ceHtml+='<div class=cerow>💰 Oportunidade(s): '+ops.map(o=>esc((o.stage||'-')+(o.amount!=null?(' · R$ '+(o.amount/100).toLocaleString('pt-BR',{minimumFractionDigits:2})):''))).join(' · ')+'</div>';
       if(ce.tags)ceHtml+='<div class=cerow>🏷️ '+esc(ce.tags)+'</div>';
       if(ce.annotation)ceHtml+='<div class=cerow>📝 '+esc(ce.annotation)+'</div>';

@@ -237,7 +237,7 @@ def _indice_ce():
         st = o.get("stage")
         stage = (st.get("name") if isinstance(st, dict) else st) or ""
         comprou = pipe.upper().startswith("CLIENTES") or stage.lower().startswith("ganho")
-        od = {"amount": o.get("amount"), "stage": stage, "status": o.get("status"), "pipeline": pipe}
+        od = {"amount": o.get("amount"), "stage": stage, "status": o.get("status"), "pipeline": pipe, "has_task": o.get("has_task")}
         if f:
             _OPP_POR_FONE.setdefault(f, []).append(od)
             if comprou:
@@ -333,7 +333,11 @@ def contexto_ce(fone_raw, nome=None):
         if _k in _seen:
             continue
         _seen.add(_k); _uniq.append(_o)
-    out = {"oportunidades": _uniq[:5], "tags": "", "annotation": ""}
+    def _ativa(_op):
+        _s = (_op.get("stage") or "").lower()
+        return not _s.startswith(("perdido", "desqualific", "ganho"))
+    sem_tarefa = any((_ativa(_op) and _op.get("has_task") is False) for _op in _uniq)
+    out = {"oportunidades": _uniq[:5], "tags": "", "annotation": "", "sem_tarefa": sem_tarefa}
     if f:
         try:
             d = mf.api("patients?phone=" + f)

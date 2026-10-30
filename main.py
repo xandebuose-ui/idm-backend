@@ -517,6 +517,7 @@ def jarbas_teste(x_idm_secret: str = Header(default="")):
 _TERM = {"result": None, "quando": None}
 _term_lock = threading.Lock()
 _TERM_CACHE = {}
+_TEMP_OVERRIDE = {}  # conv_id -> temperatura da leitura profunda (drawer); vence o batch
 _TEMP_MODEL = os.environ.get("JARBAS_TEMP_MODEL", "claude-haiku-5-5")
 
 def _fonte_de_leads():
@@ -582,6 +583,9 @@ def _rodar_termometro(motivo="poll"):
             t = cls.get("temperatura")
             if t not in baldes or t == "pendente":
                 t = "revisar" if t != "pendente" else "pendente"
+            _ov = _TEMP_OVERRIDE.get(cid)
+            if _ov in baldes and _ov not in ("revisar", "pendente"):
+                t = _ov  # leitura profunda do drawer vence o batch
             tr = tratados.get(str(cid))
             alerta = ""
             if tr:
@@ -685,6 +689,9 @@ def painel_analise(token: str, conv_id: str, nome: str = "", temperatura: str = 
                                    "origem": identidade, "identidade": identidade, "ce": ce})
     if isinstance(r, dict):
         r["ce"] = ce
+        _tp = r.get("temperatura")
+        if r.get("ok") and _tp in ("quente", "morno", "frio", "cross_sell", "operacional"):
+            _TEMP_OVERRIDE[conv_id] = _tp  # leitura profunda vence; reordena no proximo ciclo
     return r
 
 @app.get("/p/{token}/leads", response_class=HTMLResponse)

@@ -154,21 +154,23 @@ def analisar(conv_id, meta=None):
               "entenda que o Dr. X e quem OPERA; o pre/pos-op e com o Instituto. Nao confunda os dois.\n"
               "- Se a pessoa NAO for cliente com pacote (identidade 'novo' ou 'lead no CE') OU tiver oportunidade "
               "EM ABERTO no CRM, aponte no diagnostico como OPORTUNIDADE DE VENDA a atacar (orcamento/oportunidade "
-              "aberta sem fechamento). Use os dados do CE acima, nao invente numeros.")
+              "aberta sem fechamento). Use os dados do CE acima, nao invente numeros.\n"
+              "- Da tambem a 'temperatura' REAL lendo a conversa: quente=pediu preco/agenda ou decisao clara; morno=interesse sem urgencia nem data; frio=sem engajamento, parado ou sumiu; cross_sell=cliente que ja comprou e quer algo novo; operacional=cliente so tratando logistica do que ja tem. Pode divergir da 'Temperatura (do termometro)' que te passei — se divergir, a SUA leitura da conversa e a que vale.")
     user = ("Contexto do lead:\n" + ("\n".join(ctx) or "(sem metadados)") +
             "\n\nConversa real (ordem cronologica):\n" + transcript)
     _schema_an = {"type": "object", "properties": {
+        "temperatura": {"type": "string", "enum": ["quente", "morno", "frio", "cross_sell", "operacional"]},
         "diagnostico": {"type": "string"},
         "conducao": {"type": "string"},
         "mensagem": {"type": "string"}},
-        "required": ["diagnostico", "conducao", "mensagem"]}
+        "required": ["temperatura", "diagnostico", "conducao", "mensagem"]}
     try:
         parsed = _struct_call(_MODEL, system, user, _schema_an, "analise", 1400)
     except KeyError:
         return {"ok": False, "motivo": "ANTHROPIC_API_KEY ausente no Render", "conv_id": conv_id}
     except Exception as e:
         return {"ok": False, "motivo": "falha modelo: " + str(e)[:140], "conv_id": conv_id}
-    analise = {k: str(parsed.get(k, "")).strip() for k in ("diagnostico", "conducao", "mensagem")}
+    analise = {k: str(parsed.get(k, "")).strip() for k in ("temperatura", "diagnostico", "conducao", "mensagem")}
     _cache_set(conv_id, {"analise": analise, "last_date": last_date,
                          "gerado_em": int(time.time()), "modelo": _MODEL})
     return {"ok": True, "cache": False, "conv_id": conv_id, **analise}

@@ -1042,6 +1042,9 @@ def _admin_ok(x_idm_secret: str, authorization: str) -> bool:
 def rota_enriquecer(modo: str = "poll", x_idm_secret: str = Header(default=""), authorization: str = Header(default="")):
     if not _admin_ok(x_idm_secret, authorization):
         raise HTTPException(status_code=401, detail="unauthorized")
+    if modo == "renota":   # 30/10: recalcula nota/fichas de todas as conversas SEM chamar a IA
+        threading.Thread(target=_enriq.rodar, args=("completo", False, False), daemon=True).start()
+        return {"ok": True, "iniciado": "renota"}
     threading.Thread(target=_enriq.rodar, args=(modo, modo != "completo", True), daemon=True).start()
     return {"ok": True, "iniciado": modo}
 

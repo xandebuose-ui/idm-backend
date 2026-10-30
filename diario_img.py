@@ -51,6 +51,14 @@ def _wrap(d, txt, fonte, larg):
     return linhas or [""]
 
 
+def corta_global(d, t, larg):
+    f = _font("r", 19)
+    t = str(t or "")
+    while t and d.textlength(t, font=f) > larg:
+        t = t[:-1]
+    return t
+
+
 def render(dados, dia_iso, gerado_txt=""):
     import datetime as _dt
     dd = _dt.date.fromisoformat(dia_iso)
@@ -102,12 +110,99 @@ def render(dados, dia_iso, gerado_txt=""):
             d.text((PAD + 30, y + 72 + j * 30), ln, font=_font("r", 22), fill=FG)
         y += h + 18
 
+    # origem dos leads
+    po = dados.get("por_origem") or {}
+    if po:
+        itens_o = sorted(po.items(), key=lambda x: -x[1])
+        camp = sorted((dados.get("por_campanha") or {}).items(), key=lambda x: -x[1])
+        extra = []
+        if dados.get("meta_conversas") is not None and dados.get("meta_gasto"):
+            extra.append("Meta contou %d conversas · chegaram pelo anúncio: %d · sem marca do anúncio: %d" % (
+                dados.get("meta_conversas", 0), dados.get("trafego_pago_1a_msg", 0),
+                max(dados.get("meta_conversas", 0) - dados.get("trafego_pago_1a_msg", 0), 0)))
+        if dados.get("nao_informada"):
+            extra.append("Origem não informada: %d · a equipe perguntou em %d" % (dados["nao_informada"], dados.get("nao_informada_perguntou", 0)))
+        linhas_c = []
+        for k, v in camp[:4]:
+            linhas_c += ["%s: %d" % (k, v)]
+        h = 80 + 46 * len(itens_o) + (34 + 28 * len(linhas_c) if linhas_c else 0) + 30 * sum(len(_wrap(d, e, _font("r", 20), W - 2 * PAD - 60)) for e in extra) + 16
+        card(y, h)
+        d.text((PAD + 30, y + 24), "Origem dos leads de ontem", font=_font("b", 27), fill=FG)
+        yy = y + 76
+        mx = max(v for _, v in itens_o) or 1
+        for k, v in itens_o:
+            lab = str(k) if len(str(k)) <= 30 else str(k)[:29] + "…"
+            d.text((PAD + 30, yy), lab, font=_font("s", 21), fill=FG)
+            bx0, bx1 = PAD + 420, W - PAD - 90
+            d.rounded_rectangle([bx0, yy + 4, bx1, yy + 28], radius=12, fill=SOFT["bar"])
+            cor = BRAND if str(k).startswith("Tráfego") else (MID if "não informada" in str(k) else OK)
+            d.rounded_rectangle([bx0, yy + 4, bx0 + max(24, int((bx1 - bx0) * v / mx)), yy + 28], radius=12, fill=cor)
+            d.text((W - PAD - 30 - d.textlength(str(v), font=_font("b", 26)), yy - 2), str(v), font=_font("b", 26), fill=FG)
+            yy += 46
+        if linhas_c:
+            d.text((PAD + 30, yy + 4), "Tráfego pago por campanha", font=_font("s", 20), fill=MUT)
+            yy += 34
+            for ln in linhas_c:
+                d.text((PAD + 46, yy), "• " + ln, font=_font("r", 20), fill=FG)
+                yy += 28
+        for e in extra:
+            for ln in _wrap(d, e, _font("r", 20), W - 2 * PAD - 60):
+                d.text((PAD + 30, yy + 4), ln, font=_font("r", 20), fill=MUT)
+                yy += 30
+        y += h + 18
+
+    # lista dos leads de ontem
+    ll = dados.get("leads_lista") or []
+    if ll:
+        h = 120 + 40 * len(ll[:8]) + (30 if len(ll) > 8 else 0)
+        card(y, h)
+        d.text((PAD + 30, y + 24), "Leads de ontem", font=_font("b", 27), fill=FG)
+        cols = [PAD + 30, PAD + 300, PAD + 560, PAD + 820]
+        for cx, t in zip(cols, ["Lead", "Origem", "Campanha", "Etapa CRM"]):
+            d.text((cx, y + 72), t, font=_font("s", 18), fill=MUT)
+        yy = y + 104
+        def corta(t, larg, f):
+            t = str(t or "")
+            while t and d.textlength(t, font=f) > larg:
+                t = t[:-1]
+            return t
+        for l in ll[:8]:
+            f = _font("r", 20)
+            d.line([PAD + 30, yy - 6, W - PAD - 30, yy - 6], fill=LINE, width=1)
+            d.text((cols[0], yy), corta(l.get("nome"), 255, _font("s", 20)), font=_font("s", 20), fill=FG)
+            d.text((cols[1], yy), corta(l.get("origem"), 245, f), font=f, fill=FG)
+            d.text((cols[2], yy), corta(l.get("campanha") or "", 245, f), font=f, fill=MUT)
+            et = l.get("etapa") or "?"
+            d.text((cols[3], yy), corta(et, 190, f), font=f, fill=BAD if et == "sem oportunidade" else FG)
+            yy += 40
+        if len(ll) > 8:
+            d.text((PAD + 30, yy), "+%d no Painel de Leads" % (len(ll) - 8), font=_font("r", 19), fill=MUT)
+        y += h + 18
+
+    # dinheiro
+    h = 150
+    card(y, h)
+    d.text((PAD + 30, y + 24), "Orçamentos e vendas de ontem", font=_font("b", 27), fill=FG)
+    def _rs(c):
+        return "R$ " + ("{:,.0f}".format((c or 0) / 100.0)).replace(",", ".")
+    d.text((PAD + 30, y + 72), "Orçamentos: %d  ·  %s" % (dados.get("orcamentos", 0), _rs(dados.get("orcamentos_centavos"))), font=_font("s", 23), fill=FG)
+    vt = "Vendas: %d  ·  %s" % (dados.get("vendas", 0), _rs(dados.get("vendas_centavos")))
+    d.text((PAD + 30, y + 108), vt, font=_font("s", 23), fill=OK if dados.get("vendas") else BAD)
+    if dados.get("vendas_itens"):
+        d.text((PAD + 40 + d.textlength(vt, font=_font("s", 23)), y + 111), corta_global(d, "  " + ", ".join(dados["vendas_itens"]), W - 2 * PAD - 80 - d.textlength(vt, font=_font("s", 23))),
+               font=_font("r", 19), fill=MUT)
+    y += h + 18
+
     # furos
     furos = [("Leads SEM próximo passo no CRM", dados.get("sem_tarefa", 0), dados.get("sem_tarefa_nomes") or "", BAD),
              ("Leads esperando resposta (agir hoje)", dados.get("sem_resposta", 0), dados.get("sem_resposta_nomes") or "", MID),
              ("Leads sem resposta há mais de 48h", dados.get("sem_resposta_48h_mais", 0), "esfriando", BAD),
              ("Clientes esperando resposta", dados.get("sem_resposta_clientes", 0), "", MID),
              ("Novos de ontem sem oportunidade no CRM", dados.get("sem_oportunidade", 0), "", BAD)]
+    cad = dados.get("cadencia_hoje") or {}
+    if cad:
+        furos.append(("Cadência de hoje (tarefas no IDM)", sum(cad.values()),
+                      " · ".join("%s %d" % (k if str(k).startswith("sem") else str(k).split()[0], v) for k, v in sorted(cad.items(), key=lambda x: -x[1])), MID))
     linhas = []
     for lab, n, sub, cor in furos:
         subl = _wrap(d, sub, _font("r", 19), W - 2 * PAD - 220)[:2] if sub else []
@@ -165,18 +260,6 @@ def render(dados, dia_iso, gerado_txt=""):
             if k in pend:
                 p = "%d a agir" % pend.get(k, 0)
                 d.text((x + (tw - d.textlength(p, font=_font("r", 17))) / 2, y + 172), p, font=_font("r", 17), fill=MUT)
-        y += h + 18
-
-    # cadencia
-    cad = dados.get("cadencia_hoje") or {}
-    if cad:
-        txt = " · ".join("%s %d" % (k if str(k).startswith("sem") else str(k).split()[0], v) for k, v in sorted(cad.items(), key=lambda x: -x[1]))
-        linhas = _wrap(d, txt, _font("r", 23), W - 2 * PAD - 60)[:3]
-        h = 84 + 30 * len(linhas)
-        card(y, h)
-        d.text((PAD + 30, y + 24), "Cadência de hoje (por dono)", font=_font("b", 27), fill=FG)
-        for j, ln in enumerate(linhas):
-            d.text((PAD + 30, y + 70 + j * 30), ln, font=_font("r", 23), fill=FG)
         y += h + 18
 
     # rodape

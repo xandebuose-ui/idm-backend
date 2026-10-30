@@ -420,6 +420,8 @@ def _nota(doc, ia):
         crit["perguntou_cidade_bairro"] = "sim"
     if cd.get("perguntou_origem"):
         crit["perguntou_origem"] = "sim"
+    if doc.get("origem_codigo") and doc.get("origem_codigo") != "nao_informada":
+        crit["perguntou_origem"] = "nao_se_aplica"   # 30/10 regra do gestor: origem ja conhecida (anuncio etc.) -> nao precisa perguntar
     apl = [v for v in crit.values() if v in ("sim", "nao")]
     if not apl:
         return {"nota": None, "nota_criterios": crit}

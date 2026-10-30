@@ -132,6 +132,11 @@ def gerar(dia=None, gravar=True):
                  (" · custo por lead (1ª msg de tráfego) %s" % _brl_reais(cpl) if cpl else (" · nenhum lead de tráfego pago identificado pela 1ª msg" if gasto else "")))
     else:
         L.append("*📣 Meta Ads:* sem dado do dia (coletor ainda não gravou)")
+    _pc = Counter((l.get("campanha_tintim") or "campanha não identificada") for l in novos if str(l.get("origem_codigo") or "").startswith("trafego"))
+    if _pc:
+        L.append("• Tráfego pago por campanha: " + " · ".join("%s: %d" % (k, v) for k, v in _pc.most_common()))
+    if meta:
+        L.append("• Meta contou %d conversas · chegaram pelo anúncio: %d · sem marca do anúncio: %d" % (conv_meta, trafego, max(conv_meta - trafego, 0)))
     L.append("*📊 CRM:* oportunidades abertas: %d" % len(criadas) +
              ("" if not criadas else " (" + ", ".join("%s %d" % (e, n) for e, n in et_criadas.most_common()) + ")") +
              " · movimentadas: %d" % len(mexidas))
@@ -216,7 +221,20 @@ def gerar(dia=None, gravar=True):
              "sem_tarefa_nomes": nomes(sem_tarefa, 5) if sem_tarefa else "", "sem_resposta_nomes": nomes(sem_resp, 3, True) if sem_resp else "",
              "sem_resposta_clientes": len(sem_resp_cli), "termometro": dict(c), "termometro_pendentes": dict(term.get("pendentes") or {}),
              "cadencia_hoje": dict(_cad_hoje),
-             "atencao": [{"nome": a.get("nome"), "problema": a.get("problema")} for a in (term.get("atencao") or [])][:8]}
+             "atencao": [{"nome": a.get("nome"), "problema": a.get("problema")} for a in (term.get("atencao") or [])][:8],
+             # 30/10: origem completa para a imagem
+             "leads_lista": [{"nome": (l.get("nome") or l.get("fone") or "?").strip()[:28], "origem": _orig(l),
+                              "campanha": (l.get("campanha_tintim") or "")[:34],
+                              "etapa": ((l.get("crm") or {}).get("estagio") or ("sem oportunidade" if l.get("situacao_crm") == "sem_oportunidade" else "?"))}
+                             for l in novos][:12],
+             "por_campanha": dict(Counter((l.get("campanha_tintim") or "campanha não identificada") for l in novos
+                                          if str(l.get("origem_codigo") or "").startswith("trafego"))),
+             "nao_informada": sum(1 for l in novos if l.get("origem_codigo") == "nao_informada"),
+             "nao_informada_perguntou": sum(1 for l in novos if l.get("origem_codigo") == "nao_informada"
+                                            and (l.get("conduta") or {}).get("perguntou_origem")),
+             "orcamentos_centavos": sum(int(v.get("valor_centavos") or 0) for v in orc_d),
+             "vendas_centavos": sum(int(v.get("valor_centavos") or 0) for v in ganhos_d),
+             "vendas_itens": ["%s x%d" % (i, n) for i, n in itens.most_common(4)]}
     if gravar:
         db.collection(COLL).document(d).set({"dia": d, "texto": texto, "dados": dados, "status": "previa",
                                              "gerado_em": _sp_now().isoformat(timespec="seconds")})

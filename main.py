@@ -744,6 +744,8 @@ def _rodar_termometro(motivo="poll"):
         print("[termometro] %s funil=%d ciclo=%d cache=%d univ=%d" % (contagem, funil, feitas, len(_TERM_CACHE), len(universo)), flush=True)
         return res
     except Exception as e:
+        import traceback as _tbk
+        _TERM["erro"] = repr(e)[:200]; _TERM["erro_tb"] = _tbk.format_exc()[-900:]; _TERM["erro_em"] = _sp_now().isoformat(timespec="seconds")
         print("[termometro] erro:", repr(e), flush=True); return {"ok": False, "erro": str(e)[:140]}
     finally:
         _term_lock.release()
@@ -780,7 +782,10 @@ def termometro_link(token: str):
     if not PANEL_TOKEN or not hmac.compare_digest(token, PANEL_TOKEN):
         raise HTTPException(status_code=404, detail="not found")
     _maybe_tick()
-    return {"ok": True, "quando": _TERM["quando"], "result": _TERM["result"]}
+    return {"ok": True, "quando": _TERM["quando"], "result": _TERM["result"],
+            "diag": {"erro": _TERM.get("erro"), "erro_em": _TERM.get("erro_em"), "tb": _TERM.get("erro_tb"),
+                     "travado": _term_lock.locked(), "cache": len(_TERM_CACHE), "memoria": dict(_TERM_MEM),
+                     "ultimo_tick": _LAST_TICK.get("term")}}
 
 
 # ======================= PAINEL DE LEADS (termometro) =======================

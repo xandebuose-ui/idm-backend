@@ -836,6 +836,11 @@ def saude():
         "meta": {"probe": _probe("meta", _p_meta)},
         "tintim_api": {"probe": _probe("tintim", _p_tintim)},
     }
+    try:
+        import diario as _dd
+        fontes["diario_envio"] = dict(_dd.ENVIO)
+    except Exception:
+        pass
     for nome, fn in _EXTRA.items():
         try:
             fontes[nome] = fn()
@@ -853,6 +858,9 @@ def saude():
         alertas.append("META_TOKEN com problema: %s" % (fontes["meta"]["probe"].get("erro") or fontes["meta"]["probe"].get("http")))
     if not fontes["tintim_api"]["probe"].get("ok"):
         alertas.append("TINTIM_TOKEN com problema: %s" % (fontes["tintim_api"]["probe"].get("erro") or fontes["tintim_api"]["probe"].get("http")))
+    _de = fontes.get("diario_envio") or {}
+    if _de.get("ok") is False and _de.get("erro"):
+        alertas.append("Diario NAO chegou no WhatsApp: %s" % _de.get("erro"))
     atraso = {"conversas": CONV_MIN * 3, "crm": CRM_MIN * 3, "vendas": 180, "meta": 60 * 30}
     for f in _FONTES:
         u = _parse(ST[f].get("ultimo_ok"))

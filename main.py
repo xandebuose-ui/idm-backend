@@ -894,6 +894,13 @@ def rota_diario_gerar(d: str = "", x_idm_secret: str = Header(default=""), autho
         raise HTTPException(status_code=401, detail="unauthorized")
     return _diario.gerar(d or None)
 
+@app.post("/diario/teste_envio")
+def rota_diario_teste_envio(authorization: str = Header(default=""), x_idm_secret: str = Header(default="")):
+    # 1 mensagem de teste para o numero do Diario (master/segredo). Autorizada pelo Xandao em 30/10 00h45.
+    if not _admin_ok(x_idm_secret, authorization):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    return _diario.enviar("✅ Teste do Jarbas (IDM): este é o canal do seu Diário comercial. A partir de hoje ele chega aqui às 06h45.")
+
 @app.get("/api/diario")
 def api_diario(d: str = "", authorization: str = Header(default="")):
     # leitura do diario pelo app (gestao/master)

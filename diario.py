@@ -166,5 +166,107 @@ def ler(dia=None):
 def iniciar(sched):
     if sched is None or os.environ.get("DIARIO_ON", "1") == "0":
         return
-    sched.add_job(lambda: gerar(), "cron", hour=6, minute=45)
-    print("[diario] agendado 06h45 (previa, sem envio)", flush=True)
+    sched.add_job(lambda: gerar_e_enviar(), "cron", hour=6, minute=45)
+    print("[diario] agendado 06h45 (gera + envia pelo CliniChat=%s)" % DIARIO_ENVIO, flush=True)
+
+
+# ============================================================================= ENVIO PELO CLINICHAT (30/10)
+# Mesmo endpoint que o app do CE usa: POST clinichat/message/send {type,content,contactChannelId,senderType,senderId}.
+# Destino: DIARIO_FONE (padrao (18) 99717-2800, Xandao). Envia como o usuario dono do cracha.
+# Janela de 24h do WhatsApp: se o Xandao nao falou com o numero da clinica nas ultimas 24h, mensagem livre e recusada
+# (precisa template aprovado 'automacao_jarbas'). Falha fica em ENVIO e no /saude; a pagina do diario segue valendo.
+import urllib.request as _ur, urllib.error as _ue, urllib.parse as _up, base64 as _b64
+
+DIARIO_FONE = os.environ.get("DIARIO_FONE", "18997172800")
+DIARIO_ENVIO = os.environ.get("DIARIO_ENVIO", "1") == "1"
+CLINI = "https://clinichat.clinicaexperts.com.br"
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36"
+ENVIO = {"ultimo_em": None, "ok": None, "erro": None, "canal_id": None, "dia": None}
+
+def _jwt_sub(tok):
+    try:
+        p = tok.split(".")[1]; p += "=" * (-len(p) % 4)
+        return json.loads(_b64.urlsafe_b64decode(p)).get("sub")
+    except Exception:
+        return None
+
+def _req(method, path, tok, body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    r = _ur.Request(CLINI + path, data=data, method=method, headers={
+        "Authorization": "Bearer " + tok, "User-Agent": UA, "Accept": "application/json",
+        "Content-Type": "application/json"})
+    try:
+        with _ur.urlopen(r, timeout=40) as resp:
+            txt = resp.read().decode("utf-8", "ignore")
+            return resp.status, (json.loads(txt) if txt.strip() else None)
+    except _ue.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read().decode("utf-8", "ignore") or "{}")
+        except Exception:
+            return e.code, None
+
+def _norm(p):
+    import re as _re
+    d = _re.sub(r"\D", "", p or "")
+    if len(d) >= 12 and d.startswith("55"):
+        d = d[2:]
+    return d[:2] + d[-8:] if len(d) >= 10 else d
+
+def _canal_do_fone(tok, fone):
+    alvo = _norm(fone)
+    for filtro in ({"term": [alvo[-8:]]}, {}):
+        frm = 0
+        while frm < 3000:
+            q = _up.quote(json.dumps(filtro))
+            st, d = _req("GET", "/contact-channel?from=%d&to=%d&orderBy=lastMessageTime%%3ADESC&filters=%s" % (frm, frm + 50, q), tok)
+            if st != 200 or not d:
+                break
+            ccs = d.get("contactChannels") or []
+            for c in ccs:
+                ph = (c.get("contact") or {}).get("phone") or c.get("identifier") or ""
+                if _norm(ph) == alvo:
+                    return c.get("id") or c.get("contactChannelId"), c
+            total = (d.get("pagination") or {}).get("total") or 0
+            frm += 50
+            if not ccs or frm >= total:
+                break
+    return None, None
+
+def enviar(texto, fone=None):
+    import firebase_writer as _f
+    tok = _f.get_token()
+    ENVIO.update({"ultimo_em": _sp_now().isoformat(timespec="seconds"), "ok": False, "erro": None})
+    if not tok:
+        ENVIO["erro"] = "sem cracha do CliniChat"; return dict(ENVIO)
+    cid, cc = _canal_do_fone(tok, fone or DIARIO_FONE)
+    if not cid:
+        ENVIO["erro"] = "conversa do numero %s nao encontrada no CliniChat" % (fone or DIARIO_FONE); return dict(ENVIO)
+    ENVIO["canal_id"] = cid
+    body = {"type": "text", "content": texto, "contactChannelId": cid, "senderType": "users",
+            "senderId": _jwt_sub(tok), "status": "pending"}
+    st, resp = _req("POST", "/message/send", tok, body)
+    ok = st in (200, 201)
+    erro = None
+    if not ok:
+        erro = "http %s: %s" % (st, (resp or {}).get("message") if isinstance(resp, dict) else resp)
+    else:
+        # o CE devolve a lista de itens criados; se algum vier com erro de entrega, registra
+        itens = resp if isinstance(resp, list) else [resp]
+        for it in itens:
+            if isinstance(it, dict) and (it.get("errorMessage") or it.get("status") in ("failed", "error")):
+                ok, erro = False, "entrega recusada: %s" % (it.get("errorMessage") or it.get("status"))
+    ENVIO.update({"ok": ok, "erro": erro})
+    print("[diario] envio clinichat ok=%s erro=%s" % (ok, erro), flush=True)
+    return dict(ENVIO)
+
+def gerar_e_enviar():
+    r = gerar()
+    if DIARIO_ENVIO and r.get("ok"):
+        e = enviar(r["texto"].replace("_prévia — gerado", "_gerado"))
+        try:
+            db = _fw._get_db()
+            db.collection(COLL).document(r["dia"]).set({"envio": e, "status": "enviado" if e.get("ok") else "falha_envio"}, merge=True)
+        except Exception:
+            pass
+        ENVIO["dia"] = r["dia"]
+    return r

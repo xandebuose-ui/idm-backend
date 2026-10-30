@@ -151,6 +151,7 @@ def gerar(dia=None, gravar=True):
     L.append("• Nas chegadas de ontem: cidade/bairro não perguntados %d · origem não perguntada %d" % (len(cid_d), len(ori_d)))
     L.append("• Leads em andamento SEM próximo passo (tarefa com data ou agendamento): *%d*" % len(sem_tarefa) + (" — " + nomes(sem_tarefa, 6) if sem_tarefa else ""))
     L.append("• Base ativa: cidade não perguntada %d · origem não perguntada %d" % (len(cidade), len(origem_np)))
+    _cad_hoje = {}
     try:
         _hoje = _sp_now().date().isoformat()
         _cd = db.collection("escuta_cadencia").document(_hoje).get()
@@ -160,6 +161,7 @@ def gerar(dia=None, gravar=True):
             L.append("*📌 Cadência — leads sem próximo passo no CRM*")
             if _cd.exists:
                 _pd = (_cd.to_dict() or {}).get("por_dono") or {}
+                _cad_hoje.update(_pd)
                 L.append("• Hoje: " + (" · ".join("%s %d" % (k.split()[0], v) for k, v in sorted(_pd.items(), key=lambda x: -x[1])) or "nenhum"))
             if _co.exists:
                 _cf = ((_co.to_dict() or {}).get("conferencia") or {})
@@ -193,7 +195,11 @@ def gerar(dia=None, gravar=True):
              "vendas": len(ganhos_d), "notas_atendente": [{"atendente": a, "nota": n, "conversas": q} for a, n, q in notas],
              "sem_resposta": len(sem_resp), "sem_resposta_48h_mais": len(sem_resp_velhos), "sem_oportunidade": len(sem_opp),
              "cidade_nao_perguntada": len(cidade), "origem_nao_perguntada": len(origem_np), "sem_tarefa": len(sem_tarefa),
-             "t1_mediana_min": t1_med, "t1_acima_1h": lentos, "alertas": alertas}
+             "t1_mediana_min": t1_med, "t1_acima_1h": lentos, "alertas": alertas,
+             # 30/10: campos para a IMAGEM do diario
+             "sem_tarefa_nomes": nomes(sem_tarefa, 5) if sem_tarefa else "", "sem_resposta_nomes": nomes(sem_resp, 3, True) if sem_resp else "",
+             "sem_resposta_clientes": len(sem_resp_cli), "termometro": dict(c), "termometro_pendentes": dict(term.get("pendentes") or {}),
+             "cadencia_hoje": dict(_cad_hoje)}
     if gravar:
         db.collection(COLL).document(d).set({"dia": d, "texto": texto, "dados": dados, "status": "previa",
                                              "gerado_em": _sp_now().isoformat(timespec="seconds")})
@@ -305,6 +311,78 @@ def enviar(texto, fone=None):
     print("[diario] envio clinichat ok=%s erro=%s" % (ok, erro), flush=True)
     return dict(ENVIO)
 
+def imagem(r):
+    """PNG do diario a partir do resultado de gerar()."""
+    import diario_img as _di
+    return _di.render(r.get("dados") or {}, r["dia"], "Gerado %s · dados do banco do IDM" % _sp_now().strftime("%d/%m às %H:%M"))
+
+def _multipart(campos, arq_nome, arq_bytes, mime):
+    import uuid as _uu
+    b = "----idm" + _uu.uuid4().hex
+    partes = []
+    for k, v in campos.items():
+        partes.append(("--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n%s\r\n" % (b, k, v)).encode())
+    partes.append(("--%s\r\nContent-Disposition: form-data; name=\"file\"; filename=\"%s\"\r\nContent-Type: %s\r\n\r\n"
+                   % (b, arq_nome, mime)).encode() + arq_bytes + b"\r\n")
+    partes.append(("--%s--\r\n" % b).encode())
+    return b, b"".join(partes)
+
+ENVIO_IMG = {"ultimo_em": None, "ok": None, "erro": None, "etapa": None}
+
+def enviar_imagem(png, fone=None, legenda=""):
+    """Mesmo caminho do app do CE: 1) POST api/file/upload (app_jwt, fileable clini_chat)
+    2) POST clinichat /message/send type image com fileData/filePath/fileMeta."""
+    import firebase_writer as _f
+    import motor_cruzamento as _cruz
+    ENVIO_IMG.update({"ultimo_em": _sp_now().isoformat(timespec="seconds"), "ok": False, "erro": None, "etapa": "inicio"})
+    tok = _f.get_token()
+    app = _cruz._app_jwt()
+    if not tok or not app:
+        ENVIO_IMG.update({"erro": "sem cracha" if not tok else "sem app_jwt"}); return dict(ENVIO_IMG)
+    try:
+        p = tok.split(".")[1]; p += "=" * (-len(p) % 4)
+        pl = json.loads(_b64.urlsafe_b64decode(p))
+    except Exception:
+        pl = {}
+    clinic = str(pl.get("clinic_id") or os.environ.get("CE_CLINIC_ID", "57166"))
+    uid = str(pl.get("sub") or "")
+    cid, cc = _canal_do_fone(tok, fone or DIARIO_FONE)
+    if not cid:
+        ENVIO_IMG.update({"erro": "conversa nao encontrada"}); return dict(ENVIO_IMG)
+    nome = "diario-%s.png" % _sp_now().strftime("%Y%m%d-%H%M")
+    b, corpo = _multipart({"fileable_type": "clini_chat", "fileable_group": "clini_chat", "fileable_id": clinic,
+                           "permanent": "false", "clinic_id": clinic, "user_id": uid}, nome, png, "image/png")
+    ENVIO_IMG["etapa"] = "upload"
+    rq = _ur.Request(_cruz.INTERNAL + "/api/file/upload", data=corpo, method="POST", headers={
+        "Authorization": "Bearer " + app, "User-Agent": UA, "Accept": "application/json",
+        "Content-Type": "multipart/form-data; boundary=" + b})
+    try:
+        with _ur.urlopen(rq, timeout=60) as resp:
+            up = json.loads(resp.read().decode("utf-8", "ignore") or "{}")
+    except _ue.HTTPError as e:
+        ENVIO_IMG.update({"erro": "upload http %s: %s" % (e.code, e.read().decode("utf-8", "ignore")[:200])}); return dict(ENVIO_IMG)
+    except Exception as e:
+        ENVIO_IMG.update({"erro": "upload: %s" % repr(e)[:160]}); return dict(ENVIO_IMG)
+    if isinstance(up, dict) and isinstance(up.get("data"), dict) and not up.get("url"):
+        up = up["data"]
+    if not (isinstance(up, dict) and up.get("url")):
+        ENVIO_IMG.update({"erro": "upload sem url: %s" % str(up)[:200]}); return dict(ENVIO_IMG)
+    ENVIO_IMG["etapa"] = "send"
+    body = {"type": "image", "content": legenda or "", "contactChannelId": cid, "senderType": "users",
+            "senderId": uid, "status": "pending", "fileData": up.get("url"),
+            "filePath": "buckets/%s/%s.%s" % (up.get("path"), up.get("key"), up.get("extension") or "png"),
+            "fileMeta": json.dumps(up, ensure_ascii=False, default=str)}
+    st, resp = _req("POST", "/message/send", tok, body)
+    ok = st in (200, 201)
+    erro = None if ok else "send http %s: %s" % (st, str(resp)[:200])
+    if ok:
+        for it in (resp if isinstance(resp, list) else [resp]):
+            if isinstance(it, dict) and (it.get("errorMessage") or it.get("status") in ("failed", "error")):
+                ok, erro = False, "entrega recusada: %s" % (it.get("errorMessage") or it.get("status"))
+    ENVIO_IMG.update({"ok": ok, "erro": erro, "etapa": "fim"})
+    print("[diario] imagem ok=%s erro=%s" % (ok, erro), flush=True)
+    return dict(ENVIO_IMG)
+
 def gerar_e_enviar():
     try:
         r = gerar()
@@ -315,7 +393,14 @@ def gerar_e_enviar():
         print("[diario] erro ao gerar:", _tb.format_exc(), flush=True)
         return {"ok": False, "erro": repr(ex)[:200]}
     if DIARIO_ENVIO and r.get("ok"):
+        ei = {}
+        if os.environ.get("DIARIO_IMAGEM", "1") == "1":     # 30/10: imagem primeiro, texto completo logo abaixo
+            try:
+                ei = enviar_imagem(imagem(r))
+            except Exception as _ex:
+                ei = {"ok": False, "erro": "imagem: %s" % repr(_ex)[:160]}
         e = enviar(r["texto"].replace("_prévia — gerado", "_gerado"))
+        e = dict(e, imagem=ei)
         try:
             db = _fw._get_db()
             db.collection(COLL).document(r["dia"]).set({"envio": e, "status": "enviado" if e.get("ok") else "falha_envio"}, merge=True)

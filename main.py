@@ -1414,3 +1414,26 @@ def admin_proximo_passo(fone: str = "", x_idm_secret: str = Header(default=""), 
         except Exception as e:
             out["erro"] = repr(e)[:160]
     return out
+
+
+# ======================= DIARIO EM IMAGEM (30/10) =======================
+@app.get("/diario/imagem")
+def rota_diario_imagem(dia: str = "", authorization: str = Header(default=""), x_idm_secret: str = Header(default="")):
+    """Previa da imagem (base64) do diario de 'dia' (padrao: ontem). Nao envia nada. Master/segredo."""
+    if not _admin_ok(x_idm_secret, authorization):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    import base64 as _b
+    r = _diario.gerar(dia or None, gravar=False)
+    if not r.get("ok"):
+        return r
+    return {"ok": True, "dia": r["dia"], "png_b64": _b.b64encode(_diario.imagem(r)).decode()}
+
+@app.post("/diario/teste_imagem")
+def rota_diario_teste_imagem(dia: str = "", authorization: str = Header(default=""), x_idm_secret: str = Header(default="")):
+    """Envia so a IMAGEM do diario para o numero do Diario (teste pedido pelo Xandao em 30/10)."""
+    if not _admin_ok(x_idm_secret, authorization):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    r = _diario.gerar(dia or None, gravar=False)
+    if not r.get("ok"):
+        return r
+    return _diario.enviar_imagem(_diario.imagem(r), legenda="Diário comercial — teste da versão em imagem")

@@ -46,7 +46,10 @@ def gerar(dia=None, gravar=True):
         return {"ok": False, "erro": "firestore indisponivel"}
     d = dia or (_sp_now().date() - dt.timedelta(days=1)).isoformat()
     dd = dt.date.fromisoformat(d)
-    leads = [x.to_dict() or {} for x in db.collection("escuta_leads").stream()]
+    todos = [x.to_dict() or {} for x in db.collection("escuta_leads").stream()]
+    FORA = ("fornecedor_parceiro", "teste_interno", "equipe_interna", "spam", "sem_telefone")
+    fora = [l for l in todos if l.get("tipo_contato") in FORA]
+    leads = [l for l in todos if l.get("tipo_contato") not in FORA]   # fornecedor/teste/equipe/spam fora das contagens
     crm = [x.to_dict() or {} for x in db.collection(os.environ.get("ESCUTA_CRM_COLL", "escuta_crm")).stream() if x.id != "mapa"]
     vendas = [x.to_dict() or {} for x in db.collection("escuta_vendas").stream()]
     meta = (db.collection("escuta_meta").document(d).get().to_dict() or {}) if True else {}
@@ -84,7 +87,16 @@ def gerar(dia=None, gravar=True):
     sem_opp = [l for l in novos if "sem_oportunidade_no_crm" in (l.get("furos") or [])]
     cidade = [l for l in ativos if "cidade_nao_perguntada" in (l.get("furos") or [])]
     origem_np = [l for l in ativos if "origem_nao_perguntada" in (l.get("furos") or [])]
-    sem_tarefa = [l for l in ativos if "oportunidade_sem_tarefa" in (l.get("furos") or [])]
+    sem_tarefa = sorted([l for l in ativos if "oportunidade_sem_tarefa" in (l.get("furos") or [])],
+                        key=lambda l: str(l.get("ultima_msg_em") or ""), reverse=True)
+    # nota de abordagem por atendente (conversas com movimento no dia)
+    from collections import defaultdict as _dd
+    _nt = _dd(list)
+    for l in leads:
+        if l.get("nota") is not None and str(l.get("ultima_msg_em") or "")[:10] and \
+           _dia_ce(l.get("ultima_msg_em")) == d and (l.get("conduta") or {}).get("atendente"):
+            _nt[(l["conduta"]["atendente"]).split()[0]].append(float(l["nota"]))
+    notas = sorted(((a, round(sum(v) / len(v), 1), len(v)) for a, v in _nt.items()), key=lambda x: -x[2])
     t1 = [l["conduta"]["primeira_resposta_min"] for l in cheg if (l.get("conduta") or {}).get("primeira_resposta_min") is not None]
     t1_med = sorted(t1)[len(t1) // 2] if t1 else None
     lentos = sum(1 for x in t1 if x > 60)
@@ -134,9 +146,18 @@ def gerar(dia=None, gravar=True):
     cid_d = [l for l in cidade if l.get("data_chegada_sp") == d]
     ori_d = [l for l in origem_np if l.get("data_chegada_sp") == d]
     L.append("• Nas chegadas de ontem: cidade/bairro não perguntados %d · origem não perguntada %d" % (len(cid_d), len(ori_d)))
-    L.append("• Base ativa inteira: cidade não perguntada %d · origem não perguntada %d · oportunidade sem tarefa %d" % (len(cidade), len(origem_np), len(sem_tarefa)))
+    L.append("• Oportunidades de lead SEM tarefa no CRM: *%d*" % len(sem_tarefa) + (" — " + nomes(sem_tarefa, 6) if sem_tarefa else ""))
+    L.append("• Base ativa: cidade não perguntada %d · origem não perguntada %d" % (len(cidade), len(origem_np)))
+    if fora:
+        _cf = Counter(l.get("tipo_contato") for l in fora if l.get("data_chegada_sp") == d)
+        if _cf:
+            L.append("_fora da conta ontem: " + ", ".join("%s %d" % (k.replace("_", " "), v) for k, v in _cf.items()) + "_")
     if t1_med is not None:
         L.append("• 1ª resposta (mediana ontem): %d min · %d acima de 1h" % (int(t1_med), lentos))
+    if notas:
+        L.append("")
+        L.append("*⭐ Nota de abordagem (0 a 6) — conversas de ontem*")
+        L.append("• " + " · ".join("%s %s (%d)" % (a, str(n).replace(".", ","), q) for a, n, q in notas[:6]))
     L.append("")
     if c:
         L.append("*🌡️ Termômetro agora:* 🔥 %d · 🌤️ %d · ❄️ %d · 💰 %d cross-sell" % (c.get("quente", 0), c.get("morno", 0), c.get("frio", 0), c.get("cross_sell", 0)))
@@ -146,7 +167,7 @@ def gerar(dia=None, gravar=True):
     dados = {"dia": d, "chegadas": len(cheg), "leads_novos": len(novos), "clientes_voltaram": len(clientes),
              "por_origem": dict(por_origem), "trafego_pago_1a_msg": trafego, "meta_gasto": gasto, "meta_conversas": conv_meta,
              "cpl": cpl, "opps_criadas": len(criadas), "opps_movimentadas": len(mexidas), "orcamentos": len(orc_d),
-             "vendas": len(ganhos_d), "sem_resposta": len(sem_resp), "sem_resposta_48h_mais": len(sem_resp_velhos), "sem_oportunidade": len(sem_opp),
+             "vendas": len(ganhos_d), "notas_atendente": notas, "sem_resposta": len(sem_resp), "sem_resposta_48h_mais": len(sem_resp_velhos), "sem_oportunidade": len(sem_opp),
              "cidade_nao_perguntada": len(cidade), "origem_nao_perguntada": len(origem_np), "sem_tarefa": len(sem_tarefa),
              "t1_mediana_min": t1_med, "t1_acima_1h": lentos, "alertas": alertas}
     if gravar:

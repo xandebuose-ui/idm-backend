@@ -26,8 +26,8 @@ COLL_VENDAS = os.environ.get("COLETOR_COLL_VENDAS", "escuta_vendas")
 COLL_TT = os.environ.get("ESCUTA_TINTIM_COLL", "escuta_tintim")
 IA_MODEL = os.environ.get("ENRIQ_MODEL", os.environ.get("JARBAS_TEMP_MODEL", "claude-haiku-5-5"))
 IA_ON = os.environ.get("ENRIQ_IA", "1") == "1"
-IA_LOTE = int(os.environ.get("ENRIQ_IA_LOTE", "60"))      # max analises de IA por rodada
-VERSAO_REGUA = "v0.1-rascunho-30/10"
+IA_LOTE = int(os.environ.get("ENRIQ_IA_LOTE", "120"))      # max analises de IA por rodada
+VERSAO_REGUA = "v1-30/10"
 
 ST = {"ultima": None, "ok": None, "erro": None, "fichas": 0, "gravadas": 0, "ia_feitas": 0,
       "ia_erros": 0, "ia_pendentes": 0, "rodando": False, "duracao_s": None}
@@ -79,6 +79,7 @@ _ENCERRA = re.compile(r"^[\s\W]*(" + _ENC_PAL + r"[\s!.,;\W]*)+$", re.I)
 _DECL_LABEL = {"instagram": "Orgânico · Direct/Instagram", "anuncio": "Tráfego pago", "google": "Orgânico · Google",
                "site": "Orgânico · Site", "indicacao_paciente": "Indicação · paciente", "indicacao_cirurgiao": "Indicação · cirurgião",
                "indicacao_outro": "Indicação"}
+INTERNOS = set(x.strip() for x in os.environ.get("ENRIQ_INTERNOS", "1897172800").split(",") if x.strip())
 _LABEL_ORIGEM = {"trafego_pago": "Tráfego pago", "organico_bio": "Orgânico · Bio", "organico_instagram": "Orgânico · Direct/Instagram",
                  "organico_site": "Orgânico · Site", "organico_google": "Orgânico · Google",
                  "relacionamento_indicacao": "Indicação", "nao_informada": "Origem não informada"}
@@ -94,7 +95,9 @@ def _indices(db):
         if f:
             has_task = None
             try:
-                has_task = (json.loads(o.get("raw") or "{}") or {}).get("has_task")
+                _tk = (json.loads(o.get("raw") or "{}") or {}).get("tasks")
+                if isinstance(_tk, list):   # verdade = existe tarefa nao concluida (has_task do CE e enganoso)
+                    has_task = any(isinstance(t, dict) and not (t.get("done") or t.get("status") == "completed") for t in _tk)
             except Exception:
                 pass
             crm.setdefault(f, []).append({"uuid": o.get("uuid"), "pipeline": o.get("pipeline"), "estagio": o.get("estagio"),
@@ -162,6 +165,23 @@ def _deterministica(fk, ficha, msgs, crm, vendas, tt):
                 t1 = round((m["_dt"] - primeiro_lead["_dt"]).total_seconds() / 60.0, 1)
                 break
     perguntou_cidade = any(_CIDADE.search(m.get("texto") or "") for m in eq_humano)
+    from collections import Counter as _Cn
+    _rem = _Cn((m.get("remetente") or "").strip() for m in eq_humano if (m.get("remetente") or "").strip())
+    atendente = _rem.most_common(1)[0][0] if _rem else None
+    # resposta no prazo: 15 min se o lead escreveu em horario comercial (seg-sab 08-19h SP); fora dele, ate 09h do proximo dia util
+    resp_no_prazo = None
+    if t1 is not None and primeiro_lead and primeiro_lead.get("_dt"):
+        lsp = primeiro_lead["_dt"] - dt.timedelta(hours=3)
+        comercial = lsp.weekday() < 6 and 8 <= lsp.hour < 19
+        if comercial:
+            resp_no_prazo = t1 <= 15
+        else:
+            prox = lsp.replace(hour=9, minute=0, second=0, microsecond=0)
+            if lsp.hour >= 9 or lsp.weekday() == 6:
+                prox = prox + dt.timedelta(days=1)
+            while prox.weekday() == 6:
+                prox = prox + dt.timedelta(days=1)
+            resp_no_prazo = (primeiro_lead["_dt"] + dt.timedelta(minutes=t1) - dt.timedelta(hours=3)) <= prox
 
     # CRM / vendas
     opps = crm.get(fk) or []
@@ -216,7 +236,9 @@ def _deterministica(fk, ficha, msgs, crm, vendas, tt):
         "identidade": identidade, "situacao_crm": situacao_crm,
         "origem": origem, "origem_codigo": cod, "origem_tintim": t.get("fonte"), "campanha_tintim": t.get("campanha"),
         "primeira_msg_lead": txt1[:500], "ultima_msg_lead": ultima_lead_txt[:300],
-        "conduta": {"primeira_resposta_min": t1, "perguntou_cidade": perguntou_cidade, "perguntou_origem": perguntou_origem},
+        "conduta": {"primeira_resposta_min": t1, "resposta_no_prazo": resp_no_prazo, "perguntou_cidade": perguntou_cidade,
+                    "perguntou_origem": perguntou_origem, "atendente": atendente},
+        "interno": fk in INTERNOS,
         "crm": {"oportunidades": len(opps), "estagio": (principal or {}).get("estagio"), "pipeline": (principal or {}).get("pipeline"),
                 "vendedor": (principal or {}).get("vendedor"), "valor": (principal or {}).get("valor"),
                 "uuid": (principal or {}).get("uuid"), "tem_tarefa": (principal or {}).get("has_task"),
@@ -252,10 +274,14 @@ _SCHEMA = {"type": "object", "properties": {
         "tipo": {"type": "string", "enum": MOMENTOS}, "trecho": {"type": "string"}}, "required": ["tipo"]}},
     "abordagem_nota": {"type": "string", "enum": ["correta", "com_falhas", "sem_dados", "nao_se_aplica"]},
     "origem_declarada": {"type": "string", "enum": ORIGENS_DECL},
+    "tipo_contato": {"type": "string", "enum": ["lead", "cliente", "fornecedor_parceiro", "teste_interno", "equipe_interna", "spam"]},
+    "criterios": {"type": "object", "properties": {k: {"type": "string", "enum": ["sim", "nao", "nao_se_aplica"]} for k in (
+        "perguntou_cidade_bairro", "perguntou_origem", "preco_em_faixa_e_avaliacao_define", "convidou_avaliacao_2_horarios",
+        "retomou_lead_parado_24h")}},
     "abordagem_falhas": {"type": "array", "items": {"type": "string", "enum": FALHAS}},
     "resumo": {"type": "string"}},
     "required": ["servicos", "cirurgias_origem", "intencao", "momentos", "abordagem_nota", "abordagem_falhas",
-                 "origem_declarada", "resumo"]}
+                 "origem_declarada", "tipo_contato", "criterios", "resumo"]}
 
 _SYSTEM = ("Voce le conversas de WhatsApp do Instituto Dayane Mafra (Barueri/Alphaville), clinica de PRE e POS-OPERATORIO de "
            "cirurgia plastica e estetica. O Instituto NAO opera: o cirurgiao opera; o Instituto faz o pre/pos (drenagem etc.). "
@@ -276,6 +302,12 @@ _SYSTEM = ("Voce le conversas de WhatsApp do Instituto Dayane Mafra (Barueri/Alp
            "- informou_origem: quando o lead diz como conheceu (Instagram, anuncio, indicacao de fulano...).\n"
            "'origem_declarada': como a pessoa DISSE que conheceu o Instituto em QUALQUER ponto da conversa; 'ja_e_cliente' se ja era "
            "paciente; 'nao_declarou' se nao disse.\n"
+           "'tipo_contato': lead (quer comprar/conhecer), cliente (ja e paciente), fornecedor_parceiro (vende algo, representante, "
+           "parceria, outro negocio), teste_interno (teste do sistema/da equipe), equipe_interna (colaboradora, dona, familia falando "
+           "de trabalho), spam.\n"
+           "'criterios' (so para lead ou cliente pedindo algo NOVO; senao tudo 'nao_se_aplica'): perguntou_cidade_bairro; perguntou_origem; "
+           "preco_em_faixa_e_avaliacao_define ('nao_se_aplica' se ninguem falou de preco); convidou_avaliacao_2_horarios (convidou para a "
+           "Avaliacao oferecendo 2 opcoes concretas de dia/horario); retomou_lead_parado_24h ('nao_se_aplica' se o lead nao parou de responder).\n"
            "'resumo': 2 a 3 frases objetivas (quem e, o que quer, em que pe esta). Campos de lista sao listas JSON; campos de texto sao "
            "texto simples (nunca coloque colchetes ou aspas em volta). Nunca invente. Voce NAO decide se houve venda.") % VERSAO_REGUA
 
@@ -329,7 +361,10 @@ def _ia(fk, msgs, anterior, identidade="novo"):
     user = ("IDENTIDADE (dado do CRM/vendas): %s\n\n" % identidade) + ctx + ("MENSAGENS NOVAS:\n" if ctx else "CONVERSA:\n") + "\n".join(linhas)[:24000]
     r = _j._struct_call(IA_MODEL, _SYSTEM, user, _SCHEMA, "categorias", 900, timeout=60)
     ia = {k: _norm_val(r.get(k)) for k in _SCHEMA["properties"]}
-    for k in ("intencao", "abordagem_nota", "origem_declarada", "resumo"):
+    if not isinstance(ia.get("criterios"), dict):
+        ia["criterios"] = {}
+    ia["criterios"] = {k: _um(v) for k, v in ia["criterios"].items()}
+    for k in ("intencao", "abordagem_nota", "origem_declarada", "tipo_contato", "resumo"):
         ia[k] = _um(ia.get(k))
     def _flat(v):
         out = []
@@ -342,11 +377,32 @@ def _ia(fk, msgs, anterior, identidade="novo"):
     for k in ("servicos", "cirurgias_origem", "abordagem_falhas"):
         ia[k] = _flat(ia.get(k))
     ia["momentos"] = [m for m in (ia.get("momentos") or []) if isinstance(m, dict) and m.get("tipo")]
-    ia["status"] = "rascunho"
+    ia["status"] = "valendo"
     ia["regua"] = VERSAO_REGUA
     ia["modelo"] = IA_MODEL
     ultima = max((m["_dt"] for m in msgs if m.get("_dt")), default=None)
     return ia, (_iso(ultima) if ultima else None)
+
+def _nota(doc, ia):
+    """Nota 0-6 da abordagem (regua v1 do gestor). Criterio 'nao_se_aplica' sai da conta: nota = pontos/aplicaveis*6."""
+    if doc.get("tipo_contato") not in ("lead", "cliente") or not ia:
+        return {"nota": None, "nota_criterios": None}
+    if ia.get("abordagem_nota") == "nao_se_aplica" or (doc.get("conduta") or {}).get("atendente") is None:
+        return {"nota": None, "nota_criterios": None}
+    c = dict(ia.get("criterios") or {})
+    cd = doc.get("conduta") or {}
+    crit = {"resposta_15min": ("sim" if cd.get("resposta_no_prazo") else "nao") if cd.get("resposta_no_prazo") is not None else "nao_se_aplica"}
+    for k in ("perguntou_cidade_bairro", "perguntou_origem", "preco_em_faixa_e_avaliacao_define", "convidou_avaliacao_2_horarios",
+              "retomou_lead_parado_24h"):
+        crit[k] = c.get(k) or "nao_se_aplica"
+    if cd.get("perguntou_cidade"):
+        crit["perguntou_cidade_bairro"] = "sim"
+    if cd.get("perguntou_origem"):
+        crit["perguntou_origem"] = "sim"
+    apl = [v for v in crit.values() if v in ("sim", "nao")]
+    if not apl:
+        return {"nota": None, "nota_criterios": crit}
+    return {"nota": round(sum(1 for v in apl if v == "sim") / len(apl) * 6, 1), "nota_criterios": crit}
 
 # ----------------------------------------------------------------------------- rodada
 def rodar(motivo="poll", so_mudadas=True, com_ia=True):
@@ -389,7 +445,18 @@ def rodar(motivo="poll", so_mudadas=True, com_ia=True):
                     time.sleep(0.3)
                 else:
                     ia_pend += 1
-            _od = ((doc.get("ia") or ant.get("ia") or {}).get("origem_declarada"))
+            _ia_now = (doc.get("ia") or ant.get("ia") or {})
+            _tp = _ia_now.get("tipo_contato")
+            if doc.get("interno"):
+                doc["tipo_contato"] = "equipe_interna"
+            elif _tp in ("fornecedor_parceiro", "teste_interno", "equipe_interna", "spam"):
+                doc["tipo_contato"] = _tp
+            elif doc.get("identidade") == "sem_telefone":
+                doc["tipo_contato"] = "sem_telefone"
+            else:
+                doc["tipo_contato"] = "cliente" if doc.get("identidade") == "cliente" else "lead"
+            doc.update(_nota(doc, _ia_now))
+            _od = _ia_now.get("origem_declarada")
             if doc.get("origem_codigo") == "nao_informada" and _od and _od not in ("nao_declarou", "ja_e_cliente"):
                 doc["origem"] = _DECL_LABEL.get(_od, _od) + " (declarada na conversa)"
                 doc["origem_fonte"] = "declarada"

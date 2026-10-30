@@ -246,7 +246,9 @@ def _indice_ce():
         st = o.get("stage")
         stage = (st.get("name") if isinstance(st, dict) else st) or ""
         comprou = pipe.upper().startswith("CLIENTES") or stage.lower().startswith("ganho")
-        od = {"amount": o.get("amount"), "stage": stage, "status": o.get("status"), "pipeline": pipe, "has_task": o.get("has_task")}
+        od = {"amount": o.get("amount"), "stage": stage, "status": o.get("status"), "pipeline": pipe,
+              # 30/10: has_task do CE vem True para TODAS (enganoso). Verdade = tarefa NAO concluida na lista 'tasks'.
+              "has_task": any(isinstance(_t, dict) and not (_t.get("done") or _t.get("status") == "completed") for _t in (o.get("tasks") or []))}
         if f:
             _OPP_POR_FONE.setdefault(f, []).append(od)
             if comprou:

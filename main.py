@@ -1084,6 +1084,10 @@ def _coletor_start():
         if _coletor._SCHED is not None:
             _coletor._SCHED.add_job(lambda: _rodar_cruzamento("poll"), "interval", minutes=10)
             _coletor._SCHED.add_job(lambda: _rodar_termometro("poll"), "interval", minutes=2)
+        # o _startup antigo (que carregava o universo salvo) nao esta registrado: carrega aqui, senao o
+        # termometro fica parado ate o 1o cruzamento completo terminar a cada deploy
+        threading.Timer(8, _carregar_universo_firestore).start()
+        threading.Timer(30, lambda: _rodar_termometro("startup")).start()
         print("[radar] ligado: conversas 1 min -> termometro; cruzamento 10 min; termometro 2 min", flush=True)
     except Exception as e:
         print("[radar] falha ao ligar:", e, flush=True)

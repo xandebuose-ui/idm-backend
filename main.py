@@ -668,6 +668,7 @@ def _rodar_termometro(motivo="poll"):
             cid = L.get("conv")
             if not cid:
                 continue
+            cid = str(cid)   # 30/10: id SEMPRE texto (memoria no banco e override do drawer usam texto; int nao casava)
             ident = L.get("identidade") or "novo"
             sit = L.get("situacao") or "sem_opp"
             if ident != "cliente" and sit == "perdido":

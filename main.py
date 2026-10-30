@@ -636,6 +636,47 @@ def _fonte_de_leads():
     aplicar_gate = (modo != "dedicado")
     return convs, aplicar_gate
 
+TERM_DIAS_QUENTE = int(os.environ.get("TERM_DIAS_QUENTE", "3"))
+TERM_DIAS_MORNO = int(os.environ.get("TERM_DIAS_MORNO", "10"))
+_FICHAS_T = {"t": 0.0, "d": {}}
+
+def _fichas_termometro(ttl=300):
+    """fone -> {tipo, interno, esperando, ultima_msg_de, ultima_msg_em} da ficha viva (cache 5 min)."""
+    import time as _tm
+    if _FICHAS_T["d"] and _tm.time() - _FICHAS_T["t"] < ttl:
+        return _FICHAS_T["d"]
+    try:
+        db = _fw._get_db()
+        out = {}
+        if db:
+            for d in db.collection("escuta_leads").stream():
+                x = d.to_dict() or {}
+                out[d.id] = {"tipo": x.get("tipo_contato"), "interno": x.get("interno"), "esperando": x.get("esperando"),
+                             "ultima_msg_de": x.get("ultima_msg_de"), "ultima_msg_em": x.get("ultima_msg_em")}
+        _FICHAS_T.update({"t": _tm.time(), "d": out})
+    except Exception as e:
+        print("[termometro] fichas erro:", repr(e)[:100], flush=True)
+        _FICHAS_T["t"] = _tm.time() - ttl + 60
+    return _FICHAS_T["d"]
+
+def _dias_desde(iso):
+    try:
+        d = dt.datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=dt.timezone.utc)
+        return round((dt.datetime.now(dt.timezone.utc) - d).total_seconds() / 86400.0, 1)
+    except Exception:
+        return None
+
+def _dm(iso, hora=False):
+    s = str(iso or "")
+    if len(s) < 10:
+        return "?"
+    r = s[8:10] + "/" + s[5:7]
+    if hora and len(s) >= 16 and s[11:16] != "00:00":
+        r += " " + s[11:16]
+    return r
+
 def _rodar_termometro(motivo="poll"):
     import time as _t
     if motivo == "poll":
@@ -652,7 +693,9 @@ def _rodar_termometro(motivo="poll"):
             return {"ok": True, "skip": "universo nao pronto"}
         orc = int(os.environ.get("TERM_BATCH", "20"))
         baldes = {"quente": [], "morno": [], "frio": [], "cross_sell": [],
-                  "operacional": [], "revisar": [], "pendente": []}
+                  "operacional": [], "revisar": [], "pendente": [], "agendado": []}
+        fichas = _fichas_termometro()
+        fora = {}
         feitas = 0
         tratados = {}
         try:
@@ -691,22 +734,77 @@ def _rodar_termometro(motivo="poll"):
             t = cls.get("temperatura")
             if t not in baldes or t == "pendente":
                 t = "revisar" if t != "pendente" else "pendente"
-            _ov = _TEMP_OVERRIDE.get(cid)
-            if _ov in baldes and _ov not in ("revisar", "pendente"):
-                t = _ov  # leitura profunda do drawer vence o batch
+            # ---- 30/10 regras novas (gestor) ----
+            # (a) abrir o lead no painel NAO muda mais a temperatura (o override do drawer foi aposentado)
+            fk = _cruz._fone(fone_raw)
+            fx = fichas.get(fk) or {}
+            tipo = fx.get("tipo")
+            if fx.get("interno") or tipo in ("fornecedor_parceiro", "teste_interno", "equipe_interna", "spam"):
+                fora[tipo or "interno"] = fora.get(tipo or "interno", 0) + 1
+                continue
+            # (b) paciente nunca fica em Quente/Morno/Frio
+            if ident == "cliente" and t in ("quente", "morno"):
+                t = "cross_sell"
+            elif ident == "cliente" and t == "frio":
+                t = "operacional"
+            # (c) temperatura com prazo: Quente so ate 3 dias da ultima conversa; Morno ate 10; depois Frio
+            dias = _dias_desde(lt)
+            if ident != "cliente" and t in ("quente", "morno", "frio") and dias is not None:
+                if dias > TERM_DIAS_MORNO:
+                    t = "frio"
+                elif dias > TERM_DIAS_QUENTE and t == "quente":
+                    t = "morno"
+            # (d) proximo passo no CRM (tarefa com data ou agendamento futuro)
+            pp = {}
+            try:
+                pp = _cruz.proximo_passo(fone_raw) if fk else {}
+            except Exception:
+                pp = {}
+            if ident != "cliente" and pp.get("tipo") == "agendamento":
+                t = "agendado"          # ja converteu o passo: sai do funil de temperatura
+            de = L.get("de") or fx.get("ultima_msg_de")
+            esperando = (de == "lead") and not (fx.get("esperando") == "encerrada" and (fx.get("ultima_msg_em") or "")[:16] >= (lt or "")[:16])
+            if ident == "cliente" or t == "agendado":
+                em_dia = not esperando
+            else:
+                em_dia = bool(pp.get("ok")) and not esperando
+            if esperando:
+                pend = "Lead esperando resposta"
+            elif ident != "cliente" and sit == "sem_opp":
+                pend = "Sem oportunidade no CRM"
+            elif ident != "cliente" and pp.get("tipo") == "vencida":
+                pend = "Tarefa vencida em " + _dm(pp.get("quando"))
+            elif ident != "cliente" and not pp.get("ok"):
+                pend = "Sem próximo passo no CRM (tarefa com data ou agendamento)"
+            else:
+                pend = ""
+            if pp.get("tipo") == "agendamento":
+                ok_txt = "Agendada " + _dm(pp.get("quando"), hora=True) + (" · atualize a etapa no CRM" if pp.get("atualizar_etapa") else "")
+            elif pp.get("tipo") == "tarefa":
+                ok_txt = "Próximo passo: tarefa " + _dm(pp.get("quando"))
+            else:
+                ok_txt = "Em dia"
+            # (e) "Ja fiz" (tratado): vale ate o lead escrever de novo; confere no CRM; alerta so apos 24h sem nada
             tr = tratados.get(str(cid))
             alerta = ""
             if tr:
                 lt_m = tr.get("lt_marcado") or ""
                 if lt and lt_m and lt > lt_m:
-                    continue
-                if (_t.time() - float(tr.get("ts") or 0)) / 60.0 < 20:
-                    continue
-                alerta = "marcado sem acao"
-                alertas.append({"conv": cid, "nome": nome, "marcado_em": tr.get("marcado_em")})
-            baldes[t].append({"conv": cid, "nome": nome, "telefone": fone_raw, "lt": lt,
+                    tr = None            # lead escreveu depois da marcacao: marcacao vencida
+            if tr and not em_dia:
+                mins = (_t.time() - float(tr.get("ts") or 0)) / 60.0
+                if mins < 15:
+                    em_dia = True
+                    ok_txt = "Conferindo no CRM (marcado há %d min)" % int(mins)
+                elif mins >= 1440:
+                    alerta = "marcado sem acao"
+                    alertas.append({"conv": cid, "nome": nome, "marcado_em": tr.get("marcado_em")})
+            baldes[t].append({"conv": cid, "nome": nome, "telefone": fone_raw, "lt": lt, "dias": dias,
                               "identidade": ident, "motivo": cls.get("motivo", ""),
-                              "alerta": alerta, "vazamento": vazamento})
+                              "alerta": alerta, "vazamento": vazamento,
+                              "em_dia": bool(em_dia), "pendencia": "" if em_dia else pend,
+                              "status_ok": ok_txt if em_dia else "",
+                              "pp": {k: pp.get(k) for k in ("tipo", "quando", "etapa", "atualizar_etapa", "servico")} if pp else {}})
         import datetime as _dtm
         _hoje = _sp_now().date().isoformat()
         _sem = (_sp_now().date() - _dtm.timedelta(days=7)).isoformat()
@@ -723,7 +821,11 @@ def _rodar_termometro(motivo="poll"):
         except Exception:
             _origem = {}
         entrada = {"hoje": _eh, "semana": _es, "origem": _origem}
+        for _k in baldes:
+            baldes[_k].sort(key=lambda x: (x.get("em_dia", False), x.get("pendencia") != "Lead esperando resposta",
+                                           "" if not x.get("lt") else "~" + "".join(chr(255 - ord(ch)) for ch in x["lt"])))
         contagem = {k: len(v) for k, v in baldes.items()}
+        pendentes = {k: sum(1 for x in v if not x.get("em_dia")) for k, v in baldes.items()}
         funil = contagem["quente"] + contagem["morno"] + contagem["frio"] + contagem["cross_sell"]
         res = {"gerado_em": _sp_now().isoformat(timespec="seconds"), "total": len(universo),
                "classificadas_no_ciclo": feitas, "em_cache": len(_TERM_CACHE),
@@ -731,7 +833,9 @@ def _rodar_termometro(motivo="poll"):
                "funil": funil, "contagem": contagem, "entrada": entrada,
                "vazamento_total": sum(1 for _b in ("quente", "morno", "frio", "cross_sell")
                                       for _l in baldes[_b] if _l.get("vazamento")),
-               "alertas": alertas, **baldes}
+               "alertas": alertas, "pendentes": pendentes, "fora_do_termometro": fora,
+               "regras": {"quente_ate_dias": TERM_DIAS_QUENTE, "morno_ate_dias": TERM_DIAS_MORNO},
+               "agenda": {"n": _cruz._AGENDA.get("n"), "erro": _cruz._AGENDA.get("erro")}, **baldes}
         _TERM["result"] = res; _TERM["quando"] = res["gerado_em"]
         try:
             import firebase_writer as _fw
@@ -813,9 +917,7 @@ def painel_analise(token: str, conv_id: str, nome: str = "", temperatura: str = 
         except Exception:
             r["ficha"] = {}
         _tp = r.get("temperatura")
-        if r.get("ok") and _tp in ("quente", "morno", "frio", "cross_sell", "operacional"):
-            _TEMP_OVERRIDE[conv_id] = _tp  # leitura profunda vence; reordena no proximo ciclo
-            _TERM_MEM["sujo"] = True
+        # 30/10: abrir o lead NAO muda mais a temperatura (o lead sumia da lista ao ser aberto).
     return r
 
 @app.get("/p/{token}/leads", response_class=HTMLResponse)
@@ -976,6 +1078,76 @@ def _coletor_start():
         _cadencia.iniciar(_coletor._SCHED)
     except Exception as e:
         print("[passo3] falha ao iniciar:", e, flush=True)
+    # 30/10: radar (msg nova -> termometro na hora) + ciclos proprios (nao dependem de alguem com o painel aberto)
+    try:
+        _coletor.NOVIDADE_HOOKS.append(_radar_termometro)
+        if _coletor._SCHED is not None:
+            _coletor._SCHED.add_job(lambda: _rodar_cruzamento("poll"), "interval", minutes=10)
+            _coletor._SCHED.add_job(lambda: _rodar_termometro("poll"), "interval", minutes=2)
+        print("[radar] ligado: conversas 1 min -> termometro; cruzamento 10 min; termometro 2 min", flush=True)
+    except Exception as e:
+        print("[radar] falha ao ligar:", e, flush=True)
+
+_RADAR = {"ultimo": None, "novos": 0, "atualizados": 0, "erro": None}
+
+def _radar_termometro(ccs):
+    """Chamado pelo coletor a cada ciclo de 1 min com as conversas que tiveram mensagem nova.
+    Atualiza o universo do cruzamento (lead novo entra; lead existente ganha a data da ultima msg)
+    e roda o termometro na hora — sem esperar o cruzamento de 10 min."""
+    if not ccs:
+        return
+    res = _last_cruz.get("result") or {}
+    uni = res.get("universo")
+    if uni is None:
+        return
+    idx = {str(u.get("conv")): u for u in uni}
+    novos = atual = 0
+    for c in ccs:
+        try:
+            cid = str(c.get("conversationId") or "")
+            if not cid:
+                continue
+            ct = c.get("contact") or {}
+            lt = _cruz._lt_conv(c)
+            de = _cruz._de_conv(c)
+            u = idx.get(cid)
+            if u:
+                if lt and lt != u.get("lt"):
+                    u["lt"] = lt; u["de"] = de; atual += 1
+                continue
+            f = _cruz._fone(ct.get("phone") or c.get("identifier"))
+            if not f:
+                continue
+            msg = (_cruz._primeira_msg(cid) or "").lower()
+            if msg and (_cruz._RUIDO.search(msg) or _cruz._FORN.search(msg)):
+                continue
+            nv = {"conv": cid, "nome": ct.get("name"), "telefone": ct.get("phone") or c.get("identifier"),
+                  "lt": lt, "de": de, "radar": True,
+                  "criado": (c.get("createdAt") or (c.get("conversation") or {}).get("createdAt") or "")[:10],
+                  "identidade": _cruz.classifica_identidade(f, ct.get("name")), "situacao": _cruz.situacao_lead(f)}
+            uni.append(nv); idx[cid] = nv; novos += 1
+        except Exception as e:
+            _RADAR["erro"] = repr(e)[:120]
+    _RADAR.update({"ultimo": _sp_now().isoformat(timespec="seconds"), "novos": _RADAR["novos"] + novos,
+                   "atualizados": _RADAR["atualizados"] + atual})
+    if novos or atual:
+        print("[radar] novos=%d atualizados=%d -> termometro" % (novos, atual), flush=True)
+        threading.Thread(target=lambda: _rodar_termometro("radar"), daemon=True).start()
+
+_REFRESH = {"t": 0.0}
+
+def _refresh_crm_rapido():
+    """Depois de um 'Ja fiz': re-le o CRM agora (debounce 45 s) e recalcula o termometro."""
+    import time as _tm
+    if _tm.time() - _REFRESH["t"] < 45:
+        return
+    _REFRESH["t"] = _tm.time()
+    def _run():
+        try:
+            _rodar_cruzamento("tratado")
+        finally:
+            _rodar_termometro("tratado")
+    threading.Thread(target=_run, daemon=True).start()
 
 
 # ======================= PAINEL DE LEADS DENTRO DO IDM (login do app, sem link secreto) =======================
@@ -1045,6 +1217,7 @@ def api_leads_analise(conv_id: str, nome: str = "", temperatura: str = "", ident
 def api_leads_tratar(conv_id: str, lt: str = "", desfazer: bool = False, authorization: str = Header(default="")):
     uid, perfil = _usuario_leads(authorization)
     r = painel_tratar(PANEL_TOKEN, conv_id, lt, desfazer)
+    _refresh_crm_rapido()
     try:  # registra QUEM marcou (auditoria da conduta)
         db = _fw._get_db()
         if db and not desfazer:
@@ -1188,3 +1361,46 @@ def api_equipe(dias: int = 7, authorization: str = Header(default="")):
     except Exception:
         pass
     return {"de": de, "ate": ate, "total": len(rows), "atendentes": atend, "criterios": criterios, "piores": piores, "cadencia": cad}
+
+
+# ======================= DIAG (30/10): proximo passo / agenda / campos do CRM =======================
+@app.get("/admin/proximo_passo")
+def admin_proximo_passo(fone: str = "", x_idm_secret: str = Header(default=""), authorization: str = Header(default="")):
+    if not _admin_ok(x_idm_secret, authorization):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    f = _cruz._fone(fone) if fone else ""
+    out = {"radar": _RADAR, "agenda": {"n": _cruz._AGENDA.get("n"), "fones": len(_cruz._AGENDA.get("fones") or {}),
+                                        "erro": _cruz._AGENDA.get("erro")}, "indice_fones": len(_cruz._OPP_POR_FONE)}
+    if f:
+        out["fone"] = f
+        out["proximo_passo"] = _cruz.proximo_passo(f)
+        out["opps_indice"] = _cruz._OPP_POR_FONE.get(f)
+        try:
+            db = _fw._get_db()
+            amostra = []
+            for d in db.collection(os.environ.get("ESCUTA_CRM_COLL", "escuta_crm")).where("fone", "==", f).limit(3).stream():
+                raw = json.loads((d.to_dict() or {}).get("raw") or "{}")
+                amostra.append({"chaves": sorted(raw.keys()),
+                                "notas_campos": {k: (str(raw.get(k))[:400]) for k in raw if any(w in k.lower() for w in ("note", "obs", "comment", "annot", "histor", "activit", "timeline"))},
+                                "tasks": raw.get("tasks")})
+            out["crm_raw"] = amostra
+        except Exception as e:
+            out["crm_raw_erro"] = repr(e)[:160]
+    else:
+        # amostra geral: quais chaves de 'notas' existem em qualquer oportunidade
+        try:
+            db = _fw._get_db()
+            ch = {}
+            n = 0
+            for d in db.collection(os.environ.get("ESCUTA_CRM_COLL", "escuta_crm")).limit(80).stream():
+                raw = json.loads((d.to_dict() or {}).get("raw") or "{}")
+                n += 1
+                for k, v in raw.items():
+                    if any(w in k.lower() for w in ("note", "obs", "comment", "annot", "histor", "activit", "timeline")):
+                        ch.setdefault(k, 0)
+                        if v:
+                            ch[k] += 1
+            out["chaves_de_nota"] = ch; out["amostra_n"] = n
+        except Exception as e:
+            out["erro"] = repr(e)[:160]
+    return out

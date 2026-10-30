@@ -444,6 +444,7 @@ def ciclo_conversas(motivo="poll"):
         desde = wm - dt.timedelta(minutes=10)                     # margem; idempotente por id
         ccs, err_lista = _lista(desde)
         gravadas, falhas, lidas, maior = 0, [], 0, wm
+        novidades = []
         for cc in ccs:
             try:
                 n, err, pulou = _coletar_conv(db, cc)
@@ -452,6 +453,7 @@ def ciclo_conversas(motivo="poll"):
             gravadas += n
             if not pulou:
                 lidas += 1
+                novidades.append(cc)
             d = _parse(_lt(cc))
             if err:
                 falhas.append(d or wm)
@@ -466,6 +468,11 @@ def ciclo_conversas(motivo="poll"):
             if novo > wm:
                 WM["conversas_lt"] = _iso(novo)
         ok = not err_lista and not falhas
+        for _h in list(NOVIDADE_HOOKS):      # 30/10 radar: avisa o termometro na hora (lead novo / msg nova)
+            try:
+                _h(novidades)
+            except Exception as _eh:
+                print("[coletor] hook novidade erro:", repr(_eh)[:120], flush=True)
         _fim("conversas", ok, lidos=lidas, gravados=gravadas,
              erro=(err_lista or ("%d conversa(s) com erro" % len(falhas) if falhas else None)),
              parcial=bool(falhas))
@@ -880,6 +887,14 @@ def saude():
 # ============================================================================= SCHEDULER + ROTAS
 _SCHED = None
 
+NOVIDADE_HOOKS = []   # funcoes chamadas com a lista de conversas que tiveram mensagem nova no ciclo
+
+def _conv_tick():
+    # 30/10: radar. Horario comercial ampliado (07h-21h) = a cada 1 min; fora dele, a cada CONV_MIN.
+    n = _agora_sp()
+    if 7 <= n.hour < 21 or n.minute % max(CONV_MIN, 1) == 0:
+        ciclo_conversas("poll")
+
 def iniciar():
     """Chamado no startup do main. Scheduler PROPRIO (o do main nao esta registrado no app)."""
     global _SCHED
@@ -896,7 +911,7 @@ def iniciar():
     agora = _agora_sp()
     s.add_job(lambda: ciclo_crm("boot"), "date", run_date=agora + dt.timedelta(seconds=45))
     s.add_job(lambda: ciclo_crm("poll"), "interval", minutes=CRM_MIN)
-    s.add_job(lambda: ciclo_conversas("poll"), "interval", minutes=CONV_MIN,
+    s.add_job(_conv_tick, "interval", minutes=1,
               next_run_time=agora + dt.timedelta(seconds=90))
     s.add_job(lambda: ciclo_vendas("boot"), "date", run_date=agora + dt.timedelta(seconds=150))
     s.add_job(lambda: ciclo_vendas("poll"), "cron", minute=10)

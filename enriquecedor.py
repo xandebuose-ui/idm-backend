@@ -225,8 +225,16 @@ def _deterministica(fk, ficha, msgs, crm, vendas, tt):
         furos.append("origem_nao_perguntada")
     if t1 is not None and t1 > 60:
         furos.append("primeira_resposta_lenta")
-    if principal and principal.get("has_task") is False and situacao_crm == "em_andamento":
-        furos.append("oportunidade_sem_tarefa")
+    # 30/10 regra do gestor: o furo e "sem PROXIMO PASSO" (tarefa aberta com data futura OU agendamento futuro).
+    # O nome do furo foi mantido (oportunidade_sem_tarefa) para nao quebrar Diario/cadencia/painel.
+    proximo = {}
+    if situacao_crm == "em_andamento":
+        try:
+            proximo = _cruz.proximo_passo(fk)
+        except Exception:
+            proximo = {"ok": not (principal and principal.get("has_task") is False)}
+        if not proximo.get("ok"):
+            furos.append("oportunidade_sem_tarefa")
 
     return {
         "fone": fk, "nome": ficha.get("nome"), "external_id": ficha.get("external_id"),
@@ -247,7 +255,7 @@ def _deterministica(fk, ficha, msgs, crm, vendas, tt):
                    "ganho_centavos": sum(int(v.get("valor_centavos") or 0) for v in ganhos),
                    "aberto_centavos": sum(int(v.get("valor_centavos") or 0) for v in abertos),
                    "itens_comprados": sorted({i for v in ganhos for i in (v.get("itens") or []) if i})[:20]},
-        "furos": furos,
+        "furos": furos, "proximo_passo": proximo,
     }
 
 # ----------------------------------------------------------------------------- camada IA (rascunho)

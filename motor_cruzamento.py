@@ -90,6 +90,81 @@ def _lt_conv(c):
     return (lm.get("createdAt") or cv.get("lastActivityTime") or c.get("lastMessageTime")
             or cv.get("updatedAt") or c.get("updatedAt") or "")
 
+def _de_conv(c):
+    # 30/10: quem mandou a ULTIMA mensagem (lead | equipe | None). Bot/automacao nao conta como resposta da equipe.
+    cv = c.get("conversation") or {}
+    lm = cv.get("lastMessage") if isinstance(cv.get("lastMessage"), dict) else {}
+    st = str(lm.get("senderType") or "").lower()
+    if st.startswith("contact"):
+        return "lead"
+    if st == "users":
+        return "equipe"
+    return None
+
+
+_AGENDA = {"fones": {}, "t": 0.0, "erro": None, "n": 0}
+
+def agenda_cached(ttl=600):
+    """fone -> proximo agendamento FUTURO (API oficial /bookings, de agora ate +120 dias). Cache 10 min."""
+    now = time.time()
+    if _AGENDA["t"] and now - _AGENDA["t"] < ttl:
+        return _AGENDA["fones"]
+    try:
+        sp = dt.datetime.utcnow() - dt.timedelta(hours=3)
+        ini = sp.strftime("%Y-%m-%dT%H:%M:00-03:00")
+        fim = (sp + dt.timedelta(days=60)).strftime("%Y-%m-%dT23:59:59-03:00")
+        bs = mf.api_all("bookings?starts_at=%s&ends_at=%s&per_page=100" % (ini, fim), cap_pages=80)
+        out = {}
+        for b in bs or []:
+            st = str(b.get("status") or "").lower()
+            if any(k in st for k in ("cancel", "delet", "noshow", "no_show", "falt", "desmarc")):
+                continue
+            p = b.get("patient") or {}
+            f = _fone(p.get("phone"))
+            if not f:
+                continue
+            w = str(b.get("starts_at") or "")
+            if f not in out or w < out[f]["quando"]:
+                procs = ", ".join(str(x.get("name") or "") for x in (b.get("procedures") or []) if isinstance(x, dict))
+                out[f] = {"quando": w, "servico": procs[:70]}
+        _AGENDA.update({"fones": out, "t": now, "erro": None, "n": len(bs or [])})
+    except Exception as e:
+        _AGENDA["erro"] = repr(e)[:160]
+        _AGENDA["t"] = now - ttl + 120   # tenta de novo em 2 min, mantem o ultimo bom
+    return _AGENDA["fones"]
+
+_IDX_TRY = {"t": 0.0}
+
+def proximo_passo(fone_raw):
+    """Regra do gestor (30/10): lead em andamento esta EM DIA se tem proximo passo com data:
+    agendamento futuro OU tarefa aberta no CRM vencendo hoje ou depois. Nota/descricao nao entram aqui."""
+    f = _fone(fone_raw)
+    if not _OPP_POR_FONE and time.time() - _IDX_TRY["t"] > 600:
+        _IDX_TRY["t"] = time.time()
+        try:
+            indice_ce_cached()
+        except Exception:
+            pass
+    hoje = (dt.datetime.utcnow() - dt.timedelta(hours=3)).date().isoformat()
+    ag = agenda_cached().get(f) if f else None
+    opps = list(_OPP_POR_FONE.get(f, [])) if f else []
+    vivas = [o for o in opps if (o.get("pipeline") or "").upper().startswith("LEADS")
+             and not (o.get("stage") or "").lower().startswith(("perdido", "desqualific", "ganho"))]
+    etapa = vivas[0].get("stage") if vivas else None
+    tarefas = [t for o in vivas for t in (o.get("tarefas") or [])]
+    futuras = sorted(t["vence"] for t in tarefas if t.get("vence") and t["vence"][:10] >= hoje)
+    vencidas = sorted(t["vence"] for t in tarefas if t.get("vence") and t["vence"][:10] < hoje)
+    base = {"etapa": etapa, "tem_opp_viva": bool(vivas), "tem_opp": bool(opps)}
+    if ag:
+        return dict(base, ok=True, tipo="agendamento", quando=ag["quando"], servico=ag.get("servico"),
+                    atualizar_etapa=bool(vivas) and not (etapa or "").lower().startswith("agend"))
+    if futuras:
+        return dict(base, ok=True, tipo="tarefa", quando=futuras[0])
+    if vencidas:
+        return dict(base, ok=False, tipo="vencida", quando=vencidas[-1])
+    return dict(base, ok=False, tipo=("sem_data" if tarefas else "nenhum"), quando=None)
+
+
 def _primeira_msg(conv_id):
     if conv_id in _MSG_CACHE:
         return _MSG_CACHE[conv_id]
@@ -248,7 +323,12 @@ def _indice_ce():
         comprou = pipe.upper().startswith("CLIENTES") or stage.lower().startswith("ganho")
         od = {"amount": o.get("amount"), "stage": stage, "status": o.get("status"), "pipeline": pipe,
               # 30/10: has_task do CE vem True para TODAS (enganoso). Verdade = tarefa NAO concluida na lista 'tasks'.
-              "has_task": any(isinstance(_t, dict) and not (_t.get("done") or _t.get("status") == "completed") for _t in (o.get("tasks") or []))}
+              "has_task": any(isinstance(_t, dict) and not (_t.get("done") or _t.get("status") == "completed") for _t in (o.get("tasks") or [])),
+              # 30/10 regra nova: proximo passo = tarefa ABERTA com data (vence hoje ou depois) ou agendamento futuro
+              "tarefas": [{"vence": str(_t.get("ends_at") or _t.get("due_date") or _t.get("starts_at") or "")[:19],
+                           "resumo": str(_t.get("summary") or _t.get("title") or "")[:60]}
+                          for _t in (o.get("tasks") or [])
+                          if isinstance(_t, dict) and not (_t.get("done") or _t.get("status") == "completed")][:6]}
         if f:
             _OPP_POR_FONE.setdefault(f, []).append(od)
             if comprou:
@@ -347,8 +427,15 @@ def contexto_ce(fone_raw, nome=None):
     def _ativa(_op):
         _s = (_op.get("stage") or "").lower()
         return not _s.startswith(("perdido", "desqualific", "ganho"))
-    sem_tarefa = any((_ativa(_op) and _op.get("has_task") is False) for _op in _uniq)
-    out = {"oportunidades": _uniq[:5], "tags": "", "annotation": "", "sem_tarefa": sem_tarefa}
+    # 30/10 regra nova: "sem proximo passo" = opp LEADS viva sem tarefa com data futura e sem agendamento futuro
+    try:
+        _pp = proximo_passo(fone_raw)
+        sem_tarefa = bool(_pp.get("tem_opp_viva")) and not _pp.get("ok")
+    except Exception:
+        _pp = {}
+        sem_tarefa = any((_ativa(_op) and _op.get("has_task") is False) for _op in _uniq)
+    out = {"oportunidades": [{k: v for k, v in _o.items() if k != "tarefas"} for _o in _uniq[:5]], "tags": "", "annotation": "",
+           "sem_tarefa": sem_tarefa, "proximo_passo": _pp}
     if f:
         try:
             d = mf.api("patients?phone=" + f)
@@ -428,7 +515,7 @@ def rodar_cruzamento(max_msg=130):
             buckets["cliente_operacional" if comprou else "lead_andamento"] += 1
             universo.append({"conv": c.get("conversationId"), "nome": ct.get("name"),
                              "telefone": ct.get("phone") or c.get("identifier"),
-                             "lt": _lt_conv(c),
+                             "lt": _lt_conv(c), "de": _de_conv(c),
                              "criado": (c.get("createdAt") or (c.get("conversation") or {}).get("createdAt") or "")[:10],
                              "identidade": "cliente" if comprou else "lead_cadastrado",
                              "situacao": situacao_lead(f)})
@@ -462,7 +549,7 @@ def rodar_cruzamento(max_msg=130):
             buckets[bucket] += 1
             universo.append({"conv": cid, "nome": ct.get("name"),
                              "telefone": ct.get("phone") or c.get("identifier"),
-                             "lt": _lt_conv(c),
+                             "lt": _lt_conv(c), "de": _de_conv(c),
                              "criado": (c.get("createdAt") or (c.get("conversation") or {}).get("createdAt") or "")[:10],
                              "identidade": classifica_identidade(f, ct.get("name")),
                              "situacao": "sem_opp"})

@@ -48,8 +48,16 @@ position:relative;overflow:hidden;display:flex;flex-direction:column;gap:9px;cur
 .tcard .num{font-family:var(--fdisp);font-size:2.9rem;line-height:1;font-weight:600}
 .tcard .def{font-size:.84rem;color:var(--muted)}
 .tcard .open-h{margin-top:auto;font-size:.76rem;color:var(--brand);font-weight:700}
-.fora{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
-@media(max-width:520px){.fora{grid-template-columns:1fr}}
+.fora{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:14px}
+.pend{font-size:.8rem;font-weight:700;color:var(--hot);margin-top:4px;min-height:1em}
+.stl{font-size:.75rem;margin-top:4px;font-weight:600}.stl.bad{color:var(--hot)}.stl.ok{color:#2e8b57}
+.grp{font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:700;margin:14px 2px 6px}
+details.emdia>summary{cursor:pointer;font-size:.8rem;color:var(--muted);font-weight:700;margin:14px 2px 6px;list-style:none}
+details.emdia>summary::before{content:"▸ "}details.emdia[open]>summary::before{content:"▾ "}
+.mcard.ag .mnum{color:#2e8b57}
+.ppbox{margin-top:8px;padding:8px 10px;border-radius:10px;font-size:.82rem;font-weight:600}
+.ppbox.bad{background:var(--hot-soft);color:var(--hot)}.ppbox.ok{background:#e3f2ea;color:#2e8b57}
+@media(max-width:720px){.fora{grid-template-columns:1fr}}
 .mcard{background:var(--surface);border:1px dashed var(--line);border-radius:var(--r);padding:14px 16px;cursor:pointer;text-align:left;font:inherit;color:inherit;display:flex;align-items:center;gap:14px}
 .mcard:hover{background:var(--surface-2)}.mcard:focus-visible{outline:2px solid var(--accent)}
 .mcard .mnum{font-family:var(--fdisp);font-size:1.8rem;font-weight:600;min-width:42px}
@@ -109,19 +117,20 @@ footer{margin:28px 0 14px;font-size:.76rem;color:var(--muted);text-align:center}
   <section>
     <div class="sec-head"><h2>Termômetro de leads</h2><span class="hint">clique num grupo pra ver quem está nele e a análise do Jarbas</span></div>
     <div class="therm">
-      <button class="tcard hot" id="t_quente" onclick="openGroup('quente')"><div class="top"><span class="pill hot">🔥 Quente</span></div><div class="num" id="n_quente">—</div><div class="def">Pronto pra avançar: pediu preço/agenda ou decisão clara.</div><div class="open-h">Ver leads ›</div></button>
-      <button class="tcard warm" id="t_morno" onclick="openGroup('morno')"><div class="top"><span class="pill warm">🌤️ Morno</span></div><div class="num" id="n_morno">—</div><div class="def">Tem interesse, mas sem urgência nem data.</div><div class="open-h">Ver leads ›</div></button>
-      <button class="tcard cold" id="t_frio" onclick="openGroup('frio')"><div class="top"><span class="pill cold">❄️ Frio</span></div><div class="num" id="n_frio">—</div><div class="def">Sem engajamento real, parado ou sumiu. Dá pra resgatar.</div><div class="open-h">Ver leads ›</div></button>
-      <button class="tcard cs" id="t_cross" onclick="openGroup('cross_sell')"><div class="top"><span class="pill cs">💰 Cross-sell</span></div><div class="num" id="n_cross">—</div><div class="def">Cliente que já comprou e quer comprar algo novo.</div><div class="open-h">Ver leads ›</div></button>
+      <button class="tcard hot" id="t_quente" onclick="openGroup('quente')"><div class="top"><span class="pill hot">🔥 Quente</span></div><div class="num" id="n_quente">—</div><div class="pend" id="p_quente"></div><div class="def">Pronto pra avançar: pediu preço/agenda ou decisão clara.</div><div class="open-h">Ver leads ›</div></button>
+      <button class="tcard warm" id="t_morno" onclick="openGroup('morno')"><div class="top"><span class="pill warm">🌤️ Morno</span></div><div class="num" id="n_morno">—</div><div class="pend" id="p_morno"></div><div class="def">Tem interesse, mas sem urgência nem data.</div><div class="open-h">Ver leads ›</div></button>
+      <button class="tcard cold" id="t_frio" onclick="openGroup('frio')"><div class="top"><span class="pill cold">❄️ Frio</span></div><div class="num" id="n_frio">—</div><div class="pend" id="p_frio"></div><div class="def">Sem engajamento real, parado ou sumiu. Dá pra resgatar.</div><div class="open-h">Ver leads ›</div></button>
+      <button class="tcard cs" id="t_cross" onclick="openGroup('cross_sell')"><div class="top"><span class="pill cs">💰 Cross-sell</span></div><div class="num" id="n_cross">—</div><div class="pend" id="p_cross"></div><div class="def">Cliente que já comprou e quer comprar algo novo.</div><div class="open-h">Ver leads ›</div></button>
     </div>
     <div class="fora">
       <button class="mcard op" onclick="openGroup('operacional')"><div class="mnum" id="n_op">—</div><div class="ml"><b>⚙️ Operacional · fora do funil</b><br>Cliente tratando logística do que já tem (vai pra frente de pacotes ativos).</div></button>
+      <button class="mcard ag" onclick="openGroup('agendado')"><div class="mnum" id="n_ag">—</div><div class="ml"><b>📅 Agendados · fora do funil</b><br>Lead com agendamento futuro. Só cobra se a etapa do CRM estiver desatualizada.</div></button>
       <button class="mcard rev" onclick="openGroup('revisar')"><div class="mnum" id="n_rev">—</div><div class="ml"><b>🔁 Revisar</b><br>Classificação a refazer — reclassifica sozinho no próximo ciclo.</div></button>
     </div>
     <section style="margin-top:20px"><div class="sec-head"><h2>Entrada de leads</h2><span class="hint">visão geral — detalhe completo na aba Marketing</span></div><div id="entrada"></div></section>
     <div class="note"><span>ℹ️</span><div id="stat">—</div></div>
   </section>
-  <footer>IDM · Painel de Leads — termômetro ao vivo · atualiza sozinho a cada ~90s</footer>
+  <footer>IDM · Painel de Leads — termômetro ao vivo · lead novo aparece em 1–2 min · tela atualiza a cada 30s</footer>
 </div>
 <div class="scrim" id="scrim" onclick="closeDrawer()"></div>
 <aside class="drawer" id="drawer" aria-hidden="true" aria-label="Detalhe">
@@ -152,42 +161,55 @@ async function api(path,opt){opt=opt||{};
 function semLogin(st){const u=document.getElementById('upd');if(u)u.textContent=(st===403?'Seu usuário não tem acesso ao Painel de Leads.':'Faça login no app IDM para ver o painel.');}
 const E=id=>document.getElementById(id);
 const esc=s=>(s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-const LABEL={quente:'🔥 Quente',morno:'🌤️ Morno',frio:'❄️ Frio',cross_sell:'💰 Cross-sell',operacional:'⚙️ Operacional',revisar:'🔁 Revisar'};
-let DATA={};
+const LABEL={quente:'🔥 Quente',morno:'🌤️ Morno',frio:'❄️ Frio',cross_sell:'💰 Cross-sell',operacional:'⚙️ Operacional',revisar:'🔁 Revisar',agendado:'📅 Agendados'};
+const GRUPOS=['quente','morno','frio','cross_sell','operacional','agendado','revisar','pendente'];
+let DATA={},VIEW={};
+function acha(conv){for(const g of GRUPOS){const a=DATA[g]||[];for(const l of a){if(String(l.conv)===String(conv))return [g,l];}}return [null,null];}
 async function carrega(){
   try{
     const r=await api('/termometro.json',{cache:'no-store'}).then(r=>r.json());
     const x=r.result||{};DATA=x;const c=x.contagem||{};
     E('n_quente').textContent=c.quente||0;E('n_morno').textContent=c.morno||0;E('n_frio').textContent=c.frio||0;E('n_cross').textContent=c.cross_sell||0;
-    E('n_op').textContent=c.operacional||0;E('n_rev').textContent=c.revisar||0;
+    E('n_op').textContent=c.operacional||0;E('n_rev').textContent=c.revisar||0;E('n_ag').textContent=c.agendado||0;
+    const pd=x.pendentes||{};[['quente','quente'],['morno','morno'],['frio','frio'],['cross','cross_sell']].forEach(([id,k])=>{const n=pd[k]||0;E('p_'+id).textContent=n?('⚠ '+n+' precisa'+(n>1?'m':'')+' de ação'):'✓ todos em dia';E('p_'+id).style.color=n?'':'#2e8b57';});
     E('upd').textContent='Ao vivo · '+esc((r.quando||'').replace('T',' ').slice(0,16))+' · funil: '+(x.funil||0);
     E('stat').innerHTML='<b>'+(x.total||0)+'</b> conversas na inbox · <b>'+(c.pendente||0)+'</b> aguardando classificação (enchem +'+(x.classificadas_no_ciclo||0)+'/ciclo) · fonte: '+esc(x.fonte||'inbox');
     const en=x.entrada||{},og=en.origem||{};
     const ogp=Object.entries(og).sort((a,b)=>b[1]-a[1]).slice(0,4).map(([k,v])=>esc(k.replace(/_/g,' '))+': <b>'+v+'</b>').join(' · ');
     E('entrada').innerHTML='<div class=entcard><div class=entrow><div><div class=entn>'+(en.hoje||0)+'</div><div class=entl>conversas novas hoje</div></div><div><div class=entn>'+(en.semana||0)+'</div><div class=entl>últimos 7 dias</div></div></div><div class=entor>Origem (mês): '+(ogp||'—')+'</div></div>';
     const al=x.alertas||[];
-    E('alertas').innerHTML=al.length?'<div class=alertbar>⚠ '+al.length+' lead(s) marcados como tratado mas sem ação — possível não-tratado. Voltaram ao painel sinalizados.</div>':'';
+    E('alertas').innerHTML=al.length?'<div class=alertbar>⚠ '+al.length+' lead(s) marcados como "já fiz" há mais de 24h e o CRM continua sem próximo passo.</div>':'';
+    if(VIEW.g&&E('drawer').classList.contains('open')){const st=E('dbody').scrollTop;openGroup(VIEW.g,true);E('dbody').scrollTop=st;}
   }catch(e){E('upd').textContent='erro ao carregar';}
 }
 function openDrawer(){E('drawer').classList.add('open');E('scrim').classList.add('open');E('drawer').setAttribute('aria-hidden','false');}
-function closeDrawer(){E('drawer').classList.remove('open');E('scrim').classList.remove('open');E('drawer').setAttribute('aria-hidden','true');}
-function openGroup(key){
-  const arr=DATA[key]||[];
-  E('dhead').innerHTML='<h2>'+esc(LABEL[key])+' — '+arr.length+'</h2><button class="iconbtn" aria-label="Fechar" onclick="closeDrawer()">✕</button>';
-  if(!arr.length){E('dbody').innerHTML='<div class=load>Nenhum lead neste grupo agora.</div>';openDrawer();return;}
+function closeDrawer(){VIEW={};E('drawer').classList.remove('open');E('scrim').classList.remove('open');E('drawer').setAttribute('aria-hidden','true');}
+function item(key,l){
+  const idc=l.identidade=='cliente'?'cli':(l.identidade=='lead_cadastrado'?'lead':'');
+  const idl=l.identidade=='cliente'?'cliente':(l.identidade=='lead_cadastrado'?'lead no CE':'novo');
   const TTL={cli:'cliente = já comprou (histórico de compra)',lead:'lead no CE = tem cadastro, nunca comprou','':'novo = sem cadastro no Clinic Expert'};
-  let h='<div style="font-size:.78rem;color:var(--muted);margin-bottom:8px">Identidade: <b>novo</b> sem cadastro · <b>lead no CE</b> cadastrado sem compra · <b>cliente</b> já comprou</div><div class=llist>';
-  arr.forEach((l,i)=>{
-    const idc=l.identidade=='cliente'?'cli':(l.identidade=='lead_cadastrado'?'lead':'');
-    const idl=l.identidade=='cliente'?'cliente':(l.identidade=='lead_cadastrado'?'lead no CE':'novo');
-    h+='<button class=litem onclick="openLead(\''+key+'\','+i+')"><div><div class=nm>'+(esc(l.nome)||'(sem nome)')+'</div><div class=mt>'+esc(l.telefone||'')+'</div><span class="idt '+idc+'" title="'+TTL[idc]+'">'+idl+'</span>'+(l.alerta?' <span class=badge-al title="marcado sem acao">⚠</span>':'')+'</div><span class=go>›</span></button>';
-  });
-  h+='</div>';E('dbody').innerHTML=h;E('dbody').scrollTop=0;openDrawer();
+  const dias=(l.dias!=null)?(' · última conversa há '+(l.dias<1?'menos de 1 dia':Math.floor(l.dias)+' dia'+(Math.floor(l.dias)>1?'s':''))):'';
+  const st=l.em_dia?'<div class="stl ok">✓ '+esc(l.status_ok||'Em dia')+'</div>':(l.pendencia?'<div class="stl bad">⚠ '+esc(l.pendencia)+'</div>':'');
+  return '<button class=litem onclick="openLead(\''+key+'\',\''+esc(l.conv)+'\')"><div><div class=nm>'+(esc(l.nome)||'(sem nome)')+'</div><div class=mt>'+esc(l.telefone||'')+esc(dias)+'</div><span class="idt '+idc+'" title="'+TTL[idc]+'">'+idl+'</span>'+(l.alerta?' <span class=badge-al title="marcado como feito há mais de 24h sem próximo passo no CRM">⚠ marcado sem ação</span>':'')+st+'</div><span class=go>›</span></button>';
 }
-async function openLead(key,i){
-  const l=(DATA[key]||[])[i];if(!l)return;
+function openGroup(key,refresh){
+  VIEW={g:key};
+  const arr=DATA[key]||[];const pend=arr.filter(l=>!l.em_dia),ok=arr.filter(l=>l.em_dia);
+  E('dhead').innerHTML='<h2>'+esc(LABEL[key])+' — '+arr.length+'</h2><button class="iconbtn" aria-label="Fechar" onclick="closeDrawer()">✕</button>';
+  if(!arr.length){E('dbody').innerHTML='<div class=load>Nenhum lead neste grupo agora.</div>';if(!refresh)openDrawer();return;}
+  const abertoAntes=!!document.querySelector('details.emdia[open]');
+  let h='<div style="font-size:.78rem;color:var(--muted);margin-bottom:4px">Em cima: quem precisa de ação. Embaixo: quem já tem próximo passo (tarefa com data ou agendamento) — não some, só desce.</div>';
+  h+='<div class=grp>Precisa de ação — '+pend.length+'</div><div class=llist>'+(pend.length?pend.map(l=>item(key,l)).join(''):'<div class=load>Ninguém pendente aqui. 👏</div>')+'</div>';
+  if(ok.length)h+='<details class=emdia'+((refresh&&abertoAntes)?' open':'')+'><summary>✓ Em dia — '+ok.length+'</summary><div class=llist>'+ok.map(l=>item(key,l)).join('')+'</div></details>';
+  E('dbody').innerHTML=h;if(!refresh){E('dbody').scrollTop=0;openDrawer();}
+}
+async function openLead(key,conv){
+  let [g,l]=acha(conv);if(!l)return;VIEW={l:conv};
+  const mudou=(g!==key)?'<div class="ppbox ok" style="background:var(--surface-2);color:var(--muted)">Este lead agora está em '+esc(LABEL[g]||g)+'.</div>':'';
+  const pp=l.em_dia?'<div class="ppbox ok">✓ '+esc(l.status_ok||'Em dia')+'</div>':(l.pendencia?'<div class="ppbox bad">⚠ '+esc(l.pendencia)+'</div>':'');
+  key=g;
   E('dhead').innerHTML='<button class=back onclick="openGroup(\''+key+'\')">‹ voltar</button><button class="iconbtn" aria-label="Fechar" onclick="closeDrawer()">✕</button>';
-  E('dbody').innerHTML='<div class="lead-head"><div class=nm>'+(esc(l.nome)||'(sem nome)')+'</div><div class=meta><span class=tel>'+esc(l.telefone||'')+'</span></div></div>'+
+  E('dbody').innerHTML='<div class="lead-head"><div class=nm>'+(esc(l.nome)||'(sem nome)')+'</div><div class=meta><span class=tel>'+esc(l.telefone||'')+'</span></div>'+pp+mudou+'</div>'+
     '<div class="jar"><div class="jh"><span class=av>J</span> Análise do Jarbas · super-vendedor</div><div class="jbody"><div class=load>Jarbas lendo a conversa real…</div></div></div>';
   E('dbody').scrollTop=0;
   try{
@@ -199,7 +221,7 @@ async function openLead(key,i){
     let ceHtml='';
     if(ops.length||ce.tags||ce.annotation||ce.sem_tarefa){
       ceHtml='<div class=cebox><div class=cet>Contexto Clinic Expert</div>';
-      if(ce.sem_tarefa)ceHtml+='<div class=cerow style="color:#f0a84b;font-weight:600">\u26A0\uFE0F Sem tarefa registrada no CRM \u2014 vale criar uma pro follow-up n\u00e3o cair.</div>';
+      if(ce.sem_tarefa)ceHtml+='<div class=cerow style="color:#f0a84b;font-weight:600">\u26A0\uFE0F Sem pr\u00f3ximo passo no CRM \u2014 crie uma tarefa COM DATA (ligar, nova abordagem\u2026) ou fa\u00e7a o agendamento.</div>';
       if(ops.length)ceHtml+='<div class=cerow>💰 Oportunidade(s): '+ops.map(o=>esc((o.stage||'-')+(o.amount!=null?(' · R$ '+(o.amount/100).toLocaleString('pt-BR',{minimumFractionDigits:2})):''))).join(' · ')+'</div>';
       if(ce.tags)ceHtml+='<div class=cerow>🏷️ '+esc(ce.tags)+'</div>';
       if(ce.annotation)ceHtml+='<div class=cerow>📝 '+esc(ce.annotation)+'</div>';
@@ -214,15 +236,15 @@ async function openLead(key,i){
       '<div class=block><div class=t>Próxima condução</div><p>'+esc(a.conducao)+'</p></div>'+
       '<div class=block><div class=t>Sugestão de mensagem</div><div class=msg><span class=lab>Pronta pra enviar · método Instituto</span>'+esc(a.mensagem)+'</div><button class=cp onclick="cp()">📋 Copiar mensagem</button></div>'+
       (a.cache?'<div class=load style="text-align:left;padding:4px 0">(análise em cache)</div>':'')+
-      '<div><button class=btn-trat onclick="tratar(\''+l.conv+'\',\''+(l.lt||'')+'\')">✓ Marcar como tratado</button></div>';
+      '<div><button class=btn-trat onclick="tratar(\''+l.conv+'\',\''+(l.lt||'')+'\')">✓ Já fiz o próximo passo no CRM</button><div style="font-size:.74rem;color:var(--muted);margin-top:6px">O sistema confere no CRM em até 15 min. Vale tarefa com data ou agendamento. Se não achar, o lead volta para "precisa de ação".</div></div>';
   }catch(e){const jb=document.querySelector('.jar .jbody');if(jb)jb.innerHTML='<div class=load>Falha ao analisar.</div>';}
 }
 async function tratar(conv,lt){
-  if(!confirm('Confirmar que este lead já foi TRATADO? Se não houver ação na conversa, ele volta ao painel sinalizado.'))return;
+  if(!confirm('Confirma que já registrou o próximo passo no CRM (tarefa com data ou agendamento)? O sistema vai conferir.'))return;
   try{await api('/tratar?conv_id='+encodeURIComponent(conv)+'&lt='+encodeURIComponent(lt||''),{method:'POST'});}catch(e){}
-  closeDrawer();carrega();
+  closeDrawer();VIEW={};setTimeout(carrega,1500);
 }
 function cp(){navigator.clipboard.writeText(window._msg||'').then(()=>{const b=document.querySelector('.cp');if(b){b.textContent='✓ Copiado';setTimeout(()=>b.textContent='📋 Copiar mensagem',1500);}});}
 document.addEventListener('keydown',e=>{if(e.key=='Escape')closeDrawer();});
-carrega();setInterval(carrega,90000);
+carrega();setInterval(carrega,30000);
 </script></body></html>

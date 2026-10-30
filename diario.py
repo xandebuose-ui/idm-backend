@@ -149,7 +149,7 @@ def gerar(dia=None, gravar=True):
     cid_d = [l for l in cidade if l.get("data_chegada_sp") == d]
     ori_d = [l for l in origem_np if l.get("data_chegada_sp") == d]
     L.append("• Nas chegadas de ontem: cidade/bairro não perguntados %d · origem não perguntada %d" % (len(cid_d), len(ori_d)))
-    L.append("• Oportunidades de lead SEM tarefa no CRM: *%d*" % len(sem_tarefa) + (" — " + nomes(sem_tarefa, 6) if sem_tarefa else ""))
+    L.append("• Leads em andamento SEM próximo passo (tarefa com data ou agendamento): *%d*" % len(sem_tarefa) + (" — " + nomes(sem_tarefa, 6) if sem_tarefa else ""))
     L.append("• Base ativa: cidade não perguntada %d · origem não perguntada %d" % (len(cidade), len(origem_np)))
     try:
         _hoje = _sp_now().date().isoformat()

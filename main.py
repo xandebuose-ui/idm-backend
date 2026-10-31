@@ -412,6 +412,56 @@ async def ingest_token(request: Request, x_idm_secret: str = Header(default=""))
     ok = _fw.save_token(token, origem=body.get("origem"))
     return {"ok": ok, **_fw.token_info()}
 
+
+def _jwt_payload(tok):
+    import base64 as _b64, json as _js
+    try:
+        seg = tok.split(".")[1]
+        seg += "=" * (-len(seg) % 4)
+        return _js.loads(_b64.urlsafe_b64decode(seg.encode()).decode("utf-8", "ignore"))
+    except Exception:
+        return {}
+
+
+@app.post("/ingest_cracha")
+async def ingest_cracha(request: Request):
+    # 31/10: renova o cracha do CliniChat SEM segredo (igual ao /ingest_app_jwt).
+    # So guarda se: (1) e JWT do clinichat da clinica 57166, (2) a CliniChat aceita de verdade,
+    # (3) nao e mais velho que o cracha guardado (nunca rebaixa a validade).
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    token = (body.get("token") or "").strip()
+    if not token.startswith("eyJ") or len(token) < 100:
+        return {"ok": False, "motivo": "token invalido"}
+    pl = _jwt_payload(token)
+    if pl.get("aud") != "clinichat" or str(pl.get("clinic_id")) != "57166":
+        return {"ok": False, "motivo": "nao e cracha do CliniChat do Instituto"}
+    try:
+        atual = _fw.get_token()
+        exp_atual = _jwt_payload(atual).get("exp", 0) if atual else 0
+    except Exception:
+        exp_atual = 0
+    if exp_atual and (pl.get("exp") or 0) <= exp_atual:
+        return {"ok": True, "ja_estava_em_dia": True, "cracha": _fw.token_info()}
+    import urllib.request as _u, urllib.error as _ue
+    url = ("https://clinichat.clinicaexperts.com.br/contact-channel"
+           "?from=0&to=1&orderBy=lastMessageTime%3ADESC&filters=%7B%7D")
+    req = _u.Request(url, headers={"Authorization": "Bearer " + token,
+                                   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/129.0.0.0",
+                                   "Accept": "application/json"})
+    try:
+        with _u.urlopen(req, timeout=20) as r:
+            if r.status != 200:
+                return {"ok": False, "motivo": "CliniChat recusou", "status": r.status}
+    except _ue.HTTPError as e:
+        return {"ok": False, "motivo": "CliniChat recusou", "status": e.code}
+    except Exception as e:
+        return {"ok": False, "motivo": str(e)[:100]}
+    saved = _fw.save_token(token, origem=body.get("origem") or "favorito")
+    return {"ok": bool(saved), "validado_na_clinichat": True, "cracha": _fw.token_info()}
+
 @app.get("/token_status")
 def token_status(_: bool = Depends(_auth)):
     return _fw.token_info()

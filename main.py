@@ -863,7 +863,7 @@ def _rodar_termometro(motivo="poll"):
                "vazamento_total": sum(1 for _b in ("quente", "morno", "frio", "cross_sell")
                                       for _l in baldes[_b] if _l.get("vazamento")),
                "alertas": alertas, "pendentes": pendentes, "fora_do_termometro": fora, "atencao": atencao,
-               "cracha": {k: _fw.token_info().get(k) for k in ("expira_em_horas", "vencido", "nivel")},
+               "cracha": {k: __import__("firebase_writer").token_info().get(k) for k in ("expira_em_horas", "vencido", "nivel")},
                "fonte_lista": getattr(_cruz, "_FONTE_ULTIMA", None),
                "regras": {"quente_ate_dias": TERM_DIAS_QUENTE, "morno_ate_dias": TERM_DIAS_MORNO},
                "agenda": {"n": _cruz._AGENDA.get("n"), "erro": _cruz._AGENDA.get("erro")}, **baldes}

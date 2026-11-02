@@ -1786,3 +1786,33 @@ async def api_relatorio_upload(request: Request, authorization: str = Header(def
         "mes": mes, "versao": versao, "titulo": b.get("titulo") or doc_id, "html": html_,
         "criado_em": _d.datetime.utcnow().isoformat() + "Z", "criado_por": _uid})
     return {"ok": True, "id": doc_id, "bytes": len(html_)}
+
+@app.post("/api/relatorios/importar")
+async def api_relatorio_importar(request: Request, authorization: str = Header(default="")):
+    # Importa um fechamento que veio CIFRADO no repositório (repo público): só master, com a chave.
+    _uid, _p = _usuario_leads(authorization)
+    if _p.get("master") is not True:
+        raise HTTPException(status_code=403, detail="so master publica fechamento")
+    import gzip as _gz, hashlib as _hl, os as _os, datetime as _d
+    b = await request.json()
+    mes, versao, chave = str(b.get("mes", "")), str(b.get("versao", "")), str(b.get("chave", "")).encode()
+    if not re.match(r"^\d{4}-\d{2}$", mes) or versao not in ("gestao", "marketing"):
+        raise HTTPException(status_code=400, detail="mes/versao")
+    p = _os.path.join(_os.path.dirname(__file__), "relatorios_cifrados", "%s_%s.bin" % (mes, versao))
+    if not _os.path.exists(p):
+        raise HTTPException(status_code=404, detail="arquivo cifrado nao encontrado")
+    raw = open(p, "rb").read(); h, c = raw[:32], raw[32:]
+    ks = bytearray(); i = 0
+    while len(ks) < len(c):
+        ks += _hl.sha256(chave + i.to_bytes(8, "big")).digest(); i += 1
+    try:
+        html_b = _gz.decompress(bytes(x ^ y for x, y in zip(c, ks)))
+    except Exception:
+        raise HTTPException(status_code=400, detail="chave errada")
+    if _hl.sha256(html_b).digest() != h:
+        raise HTTPException(status_code=400, detail="conferencia falhou")
+    doc_id = "%s_%s" % (mes, versao)
+    _fw._get_db().collection(_REL_COLL).document(doc_id).set({
+        "mes": mes, "versao": versao, "titulo": b.get("titulo") or doc_id, "html": html_b.decode("utf-8"),
+        "criado_em": _d.datetime.utcnow().isoformat() + "Z", "criado_por": _uid})
+    return {"ok": True, "id": doc_id, "bytes": len(html_b)}

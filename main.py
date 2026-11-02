@@ -1702,3 +1702,87 @@ def admin_fonte_modo(lista: str = "", conversa: str = "", x_idm_secret: str = He
             raise HTTPException(status_code=400, detail="use firestore ou clinichat")
     import fonte as _fonte
     return _fonte.definir_modo(lista or None, conversa or None)
+
+
+# ======================= FECHAMENTOS MENSAIS (relatório de origem/tráfego congelado) =======================
+# 02/11/2026. ADITIVO. O fechamento do mês fica CONGELADO no Firestore (coleção relatorios_mensais),
+# nunca no repositório (o repo é público e o relatório tem nome de cliente).
+# Versão "gestao" = completa (master/gestao). Versão "marketing" = sem erros do comercial, sem telefone (comercial+gestao).
+# A aba Marketing do IDM mostra a lista; depois vira também o painel vivo (passo B).
+import re
+_REL_COLL = "relatorios_mensais"
+
+def _rel_pode(perfil, versao):
+    g = perfil.get("master") is True or perfil.get("role") == "gestao"
+    return g if versao == "gestao" else True
+
+@app.get("/app/marketing", response_class=HTMLResponse)
+def app_marketing():
+    html_ = """<!doctype html><html lang=pt-BR><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>Marketing — Fechamentos</title><style>
+body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#f6f3ec;color:#1c1c20}
+.top{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 14px;background:#062621;color:#fff}
+.top b{font-size:14px;margin-right:8px}.top button{border:1px solid #c9b48a;background:transparent;color:#fff;border-radius:6px;padding:6px 10px;font-size:13px;cursor:pointer}
+.top button.on{background:#c9b48a;color:#062621;font-weight:700}.top .s{font-size:12px;color:#c9d3cf;margin-left:auto}
+iframe{border:0;width:100%;height:calc(100vh - 52px);background:#fff;display:block}.msg{padding:24px;font-size:14px}
+</style></head><body><div class=top><b>📈 Marketing · Fechamentos do mês</b><span id=bt></span><span class=s id=st>carregando…</span><button onclick="imprime()">Imprimir / PDF</button></div>
+<div id=area><div class=msg>Carregando…</div></div>
+<script>
+const APPMODE=!!window.IDM_APP;let _tok=null,_tokT=0,_esp=[];
+window.addEventListener('message',e=>{if(!APPMODE||e.origin!==window.IDM_ORIGIN)return;if(e.data&&e.data.t==='idm-token'){_tok=e.data.token;_tokT=Date.now();_esp.splice(0).forEach(f=>f(_tok));}});
+function pedeToken(f){return new Promise(res=>{if(!f&&_tok&&Date.now()-_tokT<40*60e3)return res(_tok);_esp.push(res);try{parent.postMessage({t:'idm-token-req'},window.IDM_ORIGIN);}catch(e){}setTimeout(()=>{const i=_esp.indexOf(res);if(i>=0){_esp.splice(i,1);res(null);}},8000);});}
+async function api(p){let t=await pedeToken(false);let r=await fetch(p,{headers:{Authorization:'Bearer '+(t||'')}});if(r.status===401){t=await pedeToken(true);r=await fetch(p,{headers:{Authorization:'Bearer '+(t||'')}});}if(!r.ok)throw new Error(r.status);return r.json();}
+let atual=null;
+async function abre(id){const d=await api('/api/relatorios/'+encodeURIComponent(id));atual=id;document.getElementById('area').innerHTML='<iframe id=fr></iframe>';document.getElementById('fr').srcdoc=d.html;
+document.querySelectorAll('#bt button').forEach(b=>b.classList.toggle('on',b.dataset.id===id));document.getElementById('st').textContent='congelado em '+(d.criado_em||'').slice(0,10);}
+function imprime(){const f=document.getElementById('fr');if(f)f.contentWindow.print();}
+(async()=>{try{const l=await api('/api/relatorios');const bt=document.getElementById('bt');
+if(!l.itens.length){document.getElementById('area').innerHTML='<div class=msg>Nenhum fechamento publicado ainda.</div>';document.getElementById('st').textContent='';return;}
+l.itens.forEach(i=>{const b=document.createElement('button');b.textContent=i.titulo;b.dataset.id=i.id;b.onclick=()=>abre(i.id);bt.appendChild(b);});abre(l.itens[0].id);}
+catch(e){document.getElementById('area').innerHTML='<div class=msg>Sem acesso ou erro ('+e.message+'). Entre pelo app IDM.</div>';document.getElementById('st').textContent='';}})();
+</script></body></html>"""
+    inj = '<script>window.IDM_APP=1;window.IDM_ORIGIN=%s;</script>' % json.dumps(IDM_ORIGIN)
+    html_ = html_.replace("<head>", "<head>" + inj, 1)
+    return HTMLResponse(html_, headers={"Content-Security-Policy": "frame-ancestors " + IDM_ORIGIN, "Cache-Control": "no-store"})
+
+@app.get("/api/relatorios")
+def api_relatorios(authorization: str = Header(default="")):
+    _uid, _p = _usuario_leads(authorization)
+    db = _fw._get_db()
+    itens = []
+    for d in db.collection(_REL_COLL).stream():
+        x = d.to_dict() or {}
+        if _rel_pode(_p, x.get("versao")):
+            itens.append({"id": d.id, "titulo": x.get("titulo") or d.id, "mes": x.get("mes"), "versao": x.get("versao"), "criado_em": x.get("criado_em")})
+    itens.sort(key=lambda i: (i.get("mes") or "", 0 if i.get("versao") == "gestao" else 1), reverse=False)
+    itens.sort(key=lambda i: i.get("mes") or "", reverse=True)
+    return {"ok": True, "itens": itens}
+
+@app.get("/api/relatorios/{doc_id}")
+def api_relatorio(doc_id: str, authorization: str = Header(default="")):
+    _uid, _p = _usuario_leads(authorization)
+    d = _fw._get_db().collection(_REL_COLL).document(doc_id).get()
+    if not d.exists:
+        raise HTTPException(status_code=404, detail="nao encontrado")
+    x = d.to_dict() or {}
+    if not _rel_pode(_p, x.get("versao")):
+        raise HTTPException(status_code=403, detail="so gestao")
+    return {"ok": True, "html": x.get("html", ""), "criado_em": x.get("criado_em"), "titulo": x.get("titulo")}
+
+@app.post("/api/relatorios/upload")
+async def api_relatorio_upload(request: Request, authorization: str = Header(default="")):
+    _uid, _p = _usuario_leads(authorization)
+    if _p.get("master") is not True:
+        raise HTTPException(status_code=403, detail="so master publica fechamento")
+    b = await request.json()
+    mes, versao, html_ = str(b.get("mes", "")), str(b.get("versao", "")), b.get("html") or ""
+    if not re.match(r"^\d{4}-\d{2}$", mes) or versao not in ("gestao", "marketing") or len(html_) < 1000:
+        raise HTTPException(status_code=400, detail="mes AAAA-MM, versao gestao|marketing, html")
+    if len(html_.encode("utf-8")) > 900_000:
+        raise HTTPException(status_code=413, detail="html grande demais para 1 doc")
+    import datetime as _d
+    doc_id = "%s_%s" % (mes, versao)
+    _fw._get_db().collection(_REL_COLL).document(doc_id).set({
+        "mes": mes, "versao": versao, "titulo": b.get("titulo") or doc_id, "html": html_,
+        "criado_em": _d.datetime.utcnow().isoformat() + "Z", "criado_por": _uid})
+    return {"ok": True, "id": doc_id, "bytes": len(html_)}

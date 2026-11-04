@@ -1816,3 +1816,124 @@ async def api_relatorio_importar(request: Request, authorization: str = Header(d
         "mes": mes, "versao": versao, "titulo": b.get("titulo") or doc_id, "html": html_b.decode("utf-8"),
         "criado_em": _d.datetime.utcnow().isoformat() + "Z", "criado_por": _uid})
     return {"ok": True, "id": doc_id, "bytes": len(html_b)}
+
+
+# ============================================================
+# FICHA DE SESSOES — catalogo e pacientes vivos do Clinic Expert
+# ============================================================
+# Por que existe: ate 04/11/2026 a ficha (public/ficha.html) carregava a
+# lista de servicos de um array ESCRITO DENTRO DO HTML, congelado na
+# extracao de 14/09/2026. Servico cadastrado no CE depois disso nunca
+# aparecia, e so dava para registrar pela opcao "Outro".
+#
+# A ponte com o CE ja existe aqui (app_jwt renovado pelo favorito
+# "Renovar IDM"), entao a ficha passa a perguntar ao backend em vez de
+# carregar lista morta. Quem chama precisa ser usuario autenticado do
+# app — mesma checagem do /jarbas/analise.
+#
+# Cache: 10 minutos. Nao e "horas", e evita 4 chamadas ao CE a cada
+# abertura da ficha. Quem acabou de cadastrar um servico usa ?forcar=1
+# (botao "atualizar lista" na ficha) e ve na hora.
+
+_FICHA_CACHE = {"em": 0.0, "dados": None}
+_FICHA_TTL = 600  # segundos
+
+def _ficha_auth(authorization: str, x_idm_secret: str) -> bool:
+    return _jarbas_auth(authorization, x_idm_secret)
+
+def _ce_pagina(path):
+    """Uma pagina da API interna do CE, sem paginar tudo."""
+    tok = _cruz._app_jwt()
+    if not tok:
+        return None, "sem_app_jwt"
+    import urllib.request as _ur, urllib.error as _ue, json as _js
+    url = _cruz.INTERNAL + "/" + path.lstrip("/")
+    req = _ur.Request(url, headers={"Authorization": "Bearer " + tok,
+                                    "User-Agent": _cruz.mf.UA, "Accept": "application/json"})
+    try:
+        with _ur.urlopen(req, timeout=30) as r:
+            return _js.loads(r.read().decode("utf-8", "ignore")), None
+    except _ue.HTTPError as e:
+        return None, "http_%s" % e.code
+    except Exception as e:
+        return None, str(e)[:60]
+
+def _monta_catalogo():
+    # Servicos: no CE chamam-se consultation-type. O sufixo /search e obrigatorio
+    # (sem ele o endpoint devolve 405).
+    servicos, e1 = _cruz._api_interna_all("api/consultation-types/search?per_page=100")
+    pacotes,  e2 = _cruz._api_interna_all("api/combos/search?per_page=100")
+
+    def _cat(s):
+        c = s.get("consultation_type_category")
+        if isinstance(c, dict):
+            return c.get("description") or c.get("name") or "Sem categoria no Clinic Expert"
+        return "Sem categoria no Clinic Expert"
+
+    lista_s = [{"n": (s.get("description") or "").strip(), "c": _cat(s)}
+               for s in (servicos or []) if s.get("active", True) and (s.get("description") or "").strip()]
+    lista_p = [{"n": (p.get("name") or "").strip()}
+               for p in (pacotes or []) if (p.get("name") or "").strip()]
+
+    # ordem estavel: categoria, depois nome
+    lista_s.sort(key=lambda x: (x["c"], x["n"].lower()))
+    lista_p.sort(key=lambda x: x["n"].lower())
+
+    return {
+        "ok": not (e1 and e2),
+        "erro": e1 or e2,
+        "gerado_em": dt.datetime.utcnow().isoformat() + "Z",
+        "servicos": lista_s,
+        "pacotes": lista_p,
+        "total": {"servicos": len(lista_s), "pacotes": len(lista_p)},
+    }
+
+@app.get("/api/ficha/catalogo")
+def ficha_catalogo(forcar: int = 0,
+                   authorization: str = Header(default=""),
+                   x_idm_secret: str = Header(default="")):
+    if not _ficha_auth(authorization, x_idm_secret):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    import time as _t
+    agora = _t.time()
+    if not forcar and _FICHA_CACHE["dados"] and (agora - _FICHA_CACHE["em"]) < _FICHA_TTL:
+        d = dict(_FICHA_CACHE["dados"]); d["do_cache"] = True
+        d["idade_seg"] = int(agora - _FICHA_CACHE["em"])
+        return d
+    d = _monta_catalogo()
+    if d.get("servicos"):            # so guarda resultado util
+        _FICHA_CACHE["dados"] = d
+        _FICHA_CACHE["em"] = agora
+    d["do_cache"] = False
+    d["idade_seg"] = 0
+    return d
+
+@app.get("/api/ficha/pacientes")
+def ficha_pacientes(q: str = "",
+                    authorization: str = Header(default=""),
+                    x_idm_secret: str = Header(default="")):
+    """Busca paciente por nome ou telefone. So devolve nome, telefone e o
+    codigo no CE — nada de financeiro, prontuario ou agenda."""
+    if not _ficha_auth(authorization, x_idm_secret):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    termo = (q or "").strip()
+    if len(termo) < 3:
+        return {"pacientes": []}
+    # 'term' e o unico parametro que filtra de verdade nesse endpoint:
+    # search, q, name, query, nome e filter[name] devolvem a lista inteira.
+    import urllib.parse as _up
+    d, err = _ce_pagina("api/person?per_page=25&term=" + _up.quote(termo))
+    if err:
+        raise HTTPException(status_code=502, detail="clinic_expert: %s" % err)
+    linhas = d if isinstance(d, list) else (d.get("data") or [])
+    out = []
+    for p in linhas:
+        if p.get("is_patient") is False:
+            continue
+        nome = (p.get("name") or "").strip()
+        if not nome:
+            continue
+        out.append({"ceId": p.get("id"),
+                    "nome": nome,
+                    "telefone": (p.get("formatted_phone") or p.get("phone") or "")})
+    return {"pacientes": out[:15]}

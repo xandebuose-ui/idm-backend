@@ -1888,6 +1888,34 @@ def _monta_catalogo():
         "total": {"servicos": len(lista_s), "pacotes": len(lista_p)},
     }
 
+# Persistencia do ultimo catalogo bom. O Render do plano free reinicia
+# sozinho e derruba o cache de memoria; e o cracha do CE pode vencer.
+# Nos dois casos a ficha nao pode cair para a lista de 14/09 — tem de
+# receber a ULTIMA lista boa conhecida, marcada como tal.
+_FICHA_DOC = ("ficha_catalogo", "atual")
+
+def _catalogo_guardar(d):
+    try:
+        _fw._get_db().collection(_FICHA_DOC[0]).document(_FICHA_DOC[1]).set({
+            "servicos": d["servicos"], "pacotes": d["pacotes"],
+            "total": d["total"], "gerado_em": d["gerado_em"]})
+    except Exception:
+        pass
+
+def _catalogo_ultimo_bom():
+    try:
+        snap = _fw._get_db().collection(_FICHA_DOC[0]).document(_FICHA_DOC[1]).get()
+        if not snap.exists:
+            return None
+        d = snap.to_dict() or {}
+        if not d.get("servicos"):
+            return None
+        d["ok"] = True
+        d["origem"] = "ultimo_bom"
+        return d
+    except Exception:
+        return None
+
 @app.get("/api/ficha/catalogo")
 def ficha_catalogo(forcar: int = 0,
                    authorization: str = Header(default=""),
@@ -1897,13 +1925,27 @@ def ficha_catalogo(forcar: int = 0,
     import time as _t
     agora = _t.time()
     if not forcar and _FICHA_CACHE["dados"] and (agora - _FICHA_CACHE["em"]) < _FICHA_TTL:
-        d = dict(_FICHA_CACHE["dados"]); d["do_cache"] = True
+        d = dict(_FICHA_CACHE["dados"]); d["do_cache"] = True; d.setdefault("origem","clinic_expert")
         d["idade_seg"] = int(agora - _FICHA_CACHE["em"])
         return d
     d = _monta_catalogo()
-    if d.get("servicos"):            # so guarda resultado util
+    if d.get("servicos"):
+        d["origem"] = "clinic_expert"
         _FICHA_CACHE["dados"] = d
         _FICHA_CACHE["em"] = agora
+        _catalogo_guardar(d)         # guarda a ultima lista boa
+        d["do_cache"] = False
+        d["idade_seg"] = 0
+        return d
+
+    # CE nao respondeu: devolve a ultima lista boa em vez de nada
+    ub = _catalogo_ultimo_bom()
+    if ub:
+        ub["do_cache"] = True
+        ub["idade_seg"] = None
+        ub["erro"] = d.get("erro")
+        return ub
+    d["origem"] = "falhou"
     d["do_cache"] = False
     d["idade_seg"] = 0
     return d

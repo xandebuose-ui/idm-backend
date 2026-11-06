@@ -234,5 +234,14 @@ def debug(fo, de, ate):
     keep = {k: l.get(k) for k in ("fone", "nome", "external_id", "primeira_chegada", "data_chegada_sp", "ultima_msg_em", "origem_codigo",
                                    "primeira_msg_lead", "msgs_lead", "identidade", "interno")}
     keep["ia_tipo"] = (l.get("ia") or {}).get("tipo_contato"); keep["ia_origem"] = (l.get("ia") or {}).get("origem_declarada")
-    return {"lead": keep, "comprador": _cruz._eh_comprador(fo), "msgs": msgs[:12], "n_msgs": len(msgs),
+    pac = {}
+    try:
+        f = fo if len(fo) == 11 else fo  # mesmo formato usado no cruzamento
+        d0 = mf.api("patients?phone=" + f)
+        arr = (d0.get("data") or []) if isinstance(d0, dict) else []
+        if arr:
+            pac = {k: (v if not isinstance(v, (dict, list)) else "...") for k, v in arr[0].items() if k not in ("name", "phone", "email", "cpf", "document", "annotation", "address")}
+    except Exception as e:
+        pac = {"erro": str(e)[:100]}
+    return {"lead": keep, "paciente": pac, "comprador": _cruz._eh_comprador(fo), "msgs": msgs[:12], "n_msgs": len(msgs),
             "reclique": _reclique(fo, de, ate)}

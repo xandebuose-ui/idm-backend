@@ -247,7 +247,7 @@ def _grava_indice(db):
     db.collection("escuta_indice").document("conversas").set({"itens": itens, "n": len(itens), "gravado_em": _iso()})
     INDICE_ST.update({"gravado_em": _iso(), "n": len(itens), "hash": hh})
 
-def _lista(desde_dt=None, cap=LISTA_CAP):
+def _lista(desde_dt=None, cap=LISTA_CAP, incluir_sem_data=False):
     """contact-channel (historico inteiro, filters={}) ordenado por lastMessageTime DESC.
     Com desde_dt: so conversas com atividade depois dele; para de paginar quando a pagina
     inteira ja esta abaixo do corte (nao confia na ordem DENTRO da pagina)."""
@@ -277,8 +277,10 @@ def _lista(desde_dt=None, cap=LISTA_CAP):
                 pass
             d = _parse(_lt(c))
             if desde_dt and d is None:
-                abaixo += 1          # sem data legivel: nao entra no incremental (fica para backfill)
-                continue
+                if not incluir_sem_data:
+                    abaixo += 1          # sem data legivel: nao entra no incremental (fica para backfill)
+                    continue
+                out.append(c); continue  # backfill: na duvida, le (idempotente por id)
             if desde_dt and d <= desde_dt:
                 abaixo += 1
                 continue
@@ -537,7 +539,7 @@ def _backfill_run(dias):
         if not db or not _fw.get_token():
             BACKFILL["erro_lista"] = "sem firestore ou sem cracha"; return
         desde = _utcnow() - dt.timedelta(days=dias)
-        ccs, err = _lista(desde)
+        ccs, err = _lista(desde, incluir_sem_data=True)
         BACKFILL["conversas"] = len(ccs)
         BACKFILL["erro_lista"] = err
         for cc in ccs:

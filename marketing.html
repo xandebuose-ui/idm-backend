@@ -78,7 +78,8 @@ function render(){const L=D.leads,G=D.eu.gestao,B={};D.buckets.forEach(([k])=>B[
   if(k==='trafego')ex=ln('Investimento captação',brl(gCap))+ln('Custo por lead',r.leads?brl(gCap/r.leads):'—')+ln('Novos contatos Meta × achados',novCap+' × '+r.leads);
   if(k==='reativacao')ex=ln('Investimento',brl(gRea))+ln('Novos contatos Meta × achados',novRea+' × '+r.leads);
   if(k==='mkt')ex=`<table style='margin:4px 0'><tr><th>Canal</th><th class=n>Leads</th><th class=n>Ag.</th><th class=n>Vendas · R$</th></tr>`+D.canais.map(c=>{const rr=calc(B.mkt.filter(x=>x.canal===c));return `<tr><td>${c}</td><td class=n>${rr.leads}</td><td class=n>${rr.ag}</td><td class=n>${rr.won}${rr.wonv?' · '+Math.round(rr.wonv).toLocaleString('pt-BR'):''}</td></tr>`}).join('')+`</table>`;
-  return `<div class=q style='--c:${COR[k]}'><div class=t>${n}</div>`+ln('Leads',r.leads)+ln('Com oportunidade no CRM',r.opp+`<span class=pc>${pc(r.opp,r.leads)}</span>`)+ln('Agendaram',r.ag+`<span class=pc>${pc(r.ag,r.leads)}</span>`)+
+  const nCrm=B[k].filter(x=>x.via_crm).length;
+  return `<div class=q style='--c:${COR[k]}'><div class=t>${n}</div>`+ln('Leads',r.leads+(nCrm?`<span class=pc>${nCrm} de ${r.leads} só pelo CRM (manual)</span>`:''))+ln('Com oportunidade no CRM',r.opp+`<span class=pc>${pc(r.opp,r.leads)}</span>`)+ln('Agendaram',r.ag+`<span class=pc>${pc(r.ag,r.leads)}</span>`)+
   ln('· porta on-line / clínica',r.ag_on+' / '+r.ag_pr)+ln('Atendidos',r.at+`<span class=pc>${pc(r.at,r.ag)} dos agend.</span>`)+ln('Orçamentos de atendidos',r.orc+' · '+brl(r.orcv))+ln('<b>Vendas</b>',`${r.won} · ${brl(r.wonv)}`)+ln('Orçamento em aberto',brl(r.opnv))+ex+mini(B[k])+`</div>`}).join('')+`</div>`;
  // grafico
  const dias=[];let dd=new Date(D.de+'T12:00:00Z');while(dd.toISOString().slice(0,10)<=D.ate){dias.push(dd.toISOString().slice(0,10));dd.setUTCDate(dd.getUTCDate()+1);}

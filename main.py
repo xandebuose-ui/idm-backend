@@ -2001,6 +2001,19 @@ def api_mkt_vivo(de: str, ate: str, debug: str = "", authorization: str = Header
             x["fone_id"] = x.get("fone")
     return r
 
+@app.post("/api/marketing/recarga")
+def api_mkt_recarga(dias: int = 40, authorization: str = Header(default="")):
+    """Recarga retroativa das conversas (gestao master). Idempotente por id de mensagem."""
+    _uid, _p = _usuario_mkt(authorization)
+    if not (_eh_gestao(_p) and _p.get("master") is True):
+        raise HTTPException(status_code=403, detail="so master")
+    import threading as _th
+    dias = max(1, min(int(dias), 120))
+    if not _coletor._LOCKS["backfill"].acquire(blocking=False):
+        return {"ok": False, "motivo": "recarga ja rodando", "progresso": _coletor.BACKFILL}
+    _th.Thread(target=_coletor._backfill_run, args=(dias,), daemon=True).start()
+    return {"ok": True, "dias": dias}
+
 @app.post("/api/marketing/origem")
 async def api_mkt_origem(request: Request, authorization: str = Header(default="")):
     _uid, _p = _usuario_mkt(authorization)

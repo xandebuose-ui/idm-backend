@@ -110,7 +110,9 @@ _FORA = ("fornecedor_parceiro", "teste_interno", "equipe_interna", "spam")
 
 _CRM_ORIG = [(re.compile(r"indica|relacionamento|pr[eé]dio|feira|^dayane mafra$", re.I), ("rel", None)),
              (re.compile(r"chat ?gpt|\bia\b", re.I), ("mkt", "IA (ChatGPT)")),
-             ]  # demais origens do CRM nao valem como prova (v3)
+             (re.compile(r"google", re.I), ("mkt", "Google")), (re.compile(r"\bsite\b", re.I), ("mkt", "Site")),
+             (re.compile(r"bio", re.I), ("mkt", "Bio")),
+             ]  # 06/11 Xandao: "Instagram" do CRM NAO vale (nao separa anuncio de organico) -> fica sem origem
 _CRM_BASE = re.compile(r"j[aá] [eé] cliente|base|cliente antig|renova|fidelidade", re.I)
 
 def _crm_origem(ops):
@@ -250,6 +252,7 @@ def montar(de, ate, versao="gestao"):
         if (ganhou_antes or (_cruz._eh_comprador(fo) and not opp_lead)) and not o_.get("bucket"):
             fora.append({"fone": fo, "nome": l.get("nome"), "motivo": "cliente da base"}); continue
         quem, legivel, txt = None, True, ""
+        via_crm = False
         sem_cod = (l.get("origem_codigo") or "nao_informada") == "nao_informada"
         if not o_.get("bucket") and not reclique and (not l.get("primeira_msg_lead") or sem_cod):
             quem, legivel, txt = _abertura(fo, ch)
@@ -270,7 +273,7 @@ def montar(de, ate, versao="gestao"):
             if cb == "base" and quem == "equipe":
                 fora.append({"fone": fo, "nome": l.get("nome"), "motivo": "cliente da base (CRM: %s; conversa aberta pela equipe)" % s}); continue
             if cb and cb != "base":
-                b, canal = cb; prova = "origem registrada no CRM (%s)" % s
+                b, canal = cb; prova = "registrada no CRM: %s (manual — pode ter erro da equipe)" % s; via_crm = True
         if b == "nao" and not o_.get("bucket"):
             if quem is None:
                 quem, legivel, txt = _abertura(fo, ch)
@@ -291,7 +294,7 @@ def montar(de, ate, versao="gestao"):
         if bk:
             porta = "on" if "on-line" in sorted(bk, key=lambda x: x["quando"])[0]["proc"].lower() else "pr"
         L.append({"fone": fo, "nome": l.get("nome"), "chegada": ch, "bucket": b, "canal": canal, "prova": prova,
-                  "campanha": l.get("campanha_tintim"), "opp": bool(opp_lead or ops), "etapa": (l.get("crm") or {}).get("estagio"),
+                  "campanha": l.get("campanha_tintim"), "via_crm": via_crm, "opp": bool(opp_lead or ops), "etapa": (l.get("crm") or {}).get("estagio"),
                   "dono": (l.get("crm") or {}).get("vendedor"), "ag": bool(bk), "porta": porta, "at": bool(bk_fe), "on": on, "pr": pr,
                   "orc": len(q), "orcv": sum(int(v.get("valor_centavos") or 0) for v in q) / 100.0,
                   "won": len(won), "wonv": sum(int(v.get("valor_centavos") or 0) for v in won) / 100.0,

@@ -248,13 +248,13 @@ def montar(de, ate, versao="gestao"):
         opp_lead = [o for o in ops if (o.get("pipeline") or "").upper().startswith(("LEADS", "REATIV"))]
         o_ = ovr.get(fo) or {}
         if (ganhou_antes or (_cruz._eh_comprador(fo) and not opp_lead)) and not o_.get("bucket"):
-            fora.append({"nome": l.get("nome"), "motivo": "cliente da base"}); continue
+            fora.append({"fone": fo, "nome": l.get("nome"), "motivo": "cliente da base"}); continue
         quem, legivel, txt = None, True, ""
         sem_cod = (l.get("origem_codigo") or "nao_informada") == "nao_informada"
         if not o_.get("bucket") and not reclique and (not l.get("primeira_msg_lead") or sem_cod):
             quem, legivel, txt = _abertura(fo, ch)
             if not l.get("primeira_msg_lead") and quem != "equipe" and not legivel:
-                fora.append({"nome": l.get("nome"), "motivo": "sem conteúdo legível (mensagem que o sistema não exibe)"}); continue
+                fora.append({"fone": fo, "nome": l.get("nome"), "motivo": "sem conteúdo legível (mensagem que o sistema não exibe)"}); continue
         b, canal, prova = classifica(l, ovr)
         if b == "nao" and txt and not o_.get("bucket"):
             if _REAT.search(txt):
@@ -268,7 +268,7 @@ def montar(de, ate, versao="gestao"):
         if b == "nao" and not o_.get("bucket"):
             cb, s = _crm_origem(ops)
             if cb == "base" and quem == "equipe":
-                fora.append({"nome": l.get("nome"), "motivo": "cliente da base (CRM: %s; conversa aberta pela equipe)" % s}); continue
+                fora.append({"fone": fo, "nome": l.get("nome"), "motivo": "cliente da base (CRM: %s; conversa aberta pela equipe)" % s}); continue
             if cb and cb != "base":
                 b, canal = cb; prova = "origem registrada no CRM (%s)" % s
         if b == "nao" and not o_.get("bucket"):
@@ -278,10 +278,10 @@ def montar(de, ate, versao="gestao"):
                 cri = _pac_criado(fo)
                 lim_cad = (dt.date.fromisoformat(l.get("data_chegada_sp") or ch) - dt.timedelta(days=3)).isoformat()
                 if cri and cri < lim_cad:
-                    fora.append({"nome": l.get("nome"), "motivo": "cliente da base (cadastro desde %s/%s/%s; conversa aberta pela equipe)" % (cri[8:10], cri[5:7], cri[:4])}); continue
+                    fora.append({"fone": fo, "nome": l.get("nome"), "motivo": "cliente da base (cadastro desde %s/%s/%s; conversa aberta pela equipe)" % (cri[8:10], cri[5:7], cri[:4])}); continue
                 prova = "chegou por fora (conversa começa com agendamento da equipe) — origem a descobrir"
         if b is None:
-            fora.append({"nome": l.get("nome"), "motivo": canal}); continue
+            fora.append({"fone": fo, "nome": l.get("nome"), "motivo": canal}); continue
         bk = [x for x in bks.get(fo, []) if x["quando"][:10] >= ch and x["criado"] <= lim]
         bk_fe = [x for x in bk if x["quando"][:16] <= lim and x["status"].lower() == "done"]
         on = any("on-line" in x["proc"].lower() for x in bk_fe); pr = any("on-line" not in x["proc"].lower() for x in bk_fe)
@@ -313,7 +313,7 @@ def montar(de, ate, versao="gestao"):
         antigos.append({"nome": w[0].get("comprador"), "valor": sum(int(v.get("valor_centavos") or 0) for v in w) / 100.0})
     meta = _meta(de, ate)
     return {"ok": True, "de": de, "ate": ate, "versao": versao, "gerado": (dt.datetime.utcnow() - dt.timedelta(hours=3)).isoformat()[:16],
-            "leads": L, "fora": fora[:200], "antigos": antigos, "meta": meta, "contrato": CONTRATO,
+            "leads": L, "fora": fora[:1000], "antigos": antigos, "meta": meta, "contrato": CONTRATO,
             "buckets": BUCKETS, "canais": CANAIS, "wa_cap": list(WA_CAP)}
 
 

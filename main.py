@@ -1994,6 +1994,8 @@ def api_mkt_vivo(de: str, ate: str, debug: str = "", authorization: str = Header
         for x in r["leads"]:
             x["fone_id"] = hmac.new(b"mkt", (x.pop("fone", "") or "").encode(), "sha1").hexdigest()[:10]
             x.pop("furos", None); x.pop("dono", None)
+        from collections import Counter as _C
+        r["fora"] = [{"nome": "", "motivo": m, "n": n} for m, n in _C(f["motivo"].split(" (")[0] for f in r.get("fora", [])).most_common()]
     else:
         for x in r["leads"]:
             x["fone_id"] = x.get("fone")

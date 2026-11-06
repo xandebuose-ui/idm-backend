@@ -1279,6 +1279,23 @@ def _usuario_leads(authorization: str):
         raise HTTPException(status_code=403, detail="seu usuario nao tem acesso ao painel de leads")
     return uid, perfil
 
+def _usuario_mkt(authorization: str):
+    """Como _usuario_leads, mas aceita tambem a funcao 'marketing' (agencia: so a aba Marketing)."""
+    try:
+        return _usuario_leads(authorization)
+    except HTTPException as e:
+        if e.status_code != 403:
+            raise
+    from firebase_admin import auth as _fbauth
+    dec = _fbauth.verify_id_token(authorization[7:].strip())
+    perfil = (_USR_CACHE.get(dec.get("uid")) or (0, {}))[1]
+    if perfil.get("role") == "marketing":
+        return dec.get("uid"), perfil
+    raise HTTPException(status_code=403, detail="sem acesso ao painel de marketing")
+
+def _eh_gestao(p):
+    return p.get("master") is True or p.get("role") == "gestao"
+
 @app.get("/app/leads", response_class=HTMLResponse)
 def app_leads():
     # Casca do painel para o iframe do IDM. Sem dado nenhum: os dados so vem pelas /api/leads/* com login.
@@ -1718,36 +1735,16 @@ def _rel_pode(perfil, versao):
 
 @app.get("/app/marketing", response_class=HTMLResponse)
 def app_marketing():
-    html_ = """<!doctype html><html lang=pt-BR><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
-<title>Marketing — Fechamentos</title><style>
-body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#f6f3ec;color:#1c1c20}
-.top{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 14px;background:#062621;color:#fff}
-.top b{font-size:14px;margin-right:8px}.top button{border:1px solid #c9b48a;background:transparent;color:#fff;border-radius:6px;padding:6px 10px;font-size:13px;cursor:pointer}
-.top button.on{background:#c9b48a;color:#062621;font-weight:700}.top .s{font-size:12px;color:#c9d3cf;margin-left:auto}
-iframe{border:0;width:100%;height:calc(100vh - 52px);background:#fff;display:block}.msg{padding:24px;font-size:14px}
-</style></head><body><div class=top><b>📈 Marketing · Fechamentos do mês</b><span id=bt></span><span class=s id=st>carregando…</span><button onclick="imprime()">Imprimir / PDF</button></div>
-<div id=area><div class=msg>Carregando…</div></div>
-<script>
-const APPMODE=!!window.IDM_APP;let _tok=null,_tokT=0,_esp=[];
-window.addEventListener('message',e=>{if(!APPMODE||e.origin!==window.IDM_ORIGIN)return;if(e.data&&e.data.t==='idm-token'){_tok=e.data.token;_tokT=Date.now();_esp.splice(0).forEach(f=>f(_tok));}});
-function pedeToken(f){return new Promise(res=>{if(!f&&_tok&&Date.now()-_tokT<40*60e3)return res(_tok);_esp.push(res);try{parent.postMessage({t:'idm-token-req'},window.IDM_ORIGIN);}catch(e){}setTimeout(()=>{const i=_esp.indexOf(res);if(i>=0){_esp.splice(i,1);res(null);}},8000);});}
-async function api(p){let t=await pedeToken(false);let r=await fetch(p,{headers:{Authorization:'Bearer '+(t||'')}});if(r.status===401){t=await pedeToken(true);r=await fetch(p,{headers:{Authorization:'Bearer '+(t||'')}});}if(!r.ok)throw new Error(r.status);return r.json();}
-let atual=null;
-async function abre(id){const d=await api('/api/relatorios/'+encodeURIComponent(id));atual=id;document.getElementById('area').innerHTML='<iframe id=fr></iframe>';document.getElementById('fr').srcdoc=d.html;
-document.querySelectorAll('#bt button').forEach(b=>b.classList.toggle('on',b.dataset.id===id));document.getElementById('st').textContent='congelado em '+(d.criado_em||'').slice(0,10);}
-function imprime(){const f=document.getElementById('fr');if(f)f.contentWindow.print();}
-(async()=>{try{const l=await api('/api/relatorios');const bt=document.getElementById('bt');
-if(!l.itens.length){document.getElementById('area').innerHTML='<div class=msg>Nenhum fechamento publicado ainda.</div>';document.getElementById('st').textContent='';return;}
-l.itens.forEach(i=>{const b=document.createElement('button');b.textContent=i.titulo;b.dataset.id=i.id;b.onclick=()=>abre(i.id);bt.appendChild(b);});abre(l.itens[0].id);}
-catch(e){document.getElementById('area').innerHTML='<div class=msg>Sem acesso ou erro ('+e.message+'). Entre pelo app IDM.</div>';document.getElementById('st').textContent='';}})();
-</script></body></html>"""
+    import os as _os
+    with open(_os.path.join(_os.path.dirname(__file__), "marketing.html"), encoding="utf-8") as _f:
+        html_ = _f.read()
     inj = '<script>window.IDM_APP=1;window.IDM_ORIGIN=%s;</script>' % json.dumps(IDM_ORIGIN)
     html_ = html_.replace("<head>", "<head>" + inj, 1)
     return HTMLResponse(html_, headers={"Content-Security-Policy": "frame-ancestors " + IDM_ORIGIN, "Cache-Control": "no-store"})
 
 @app.get("/api/relatorios")
 def api_relatorios(authorization: str = Header(default="")):
-    _uid, _p = _usuario_leads(authorization)
+    _uid, _p = _usuario_mkt(authorization)
     db = _fw._get_db()
     itens = []
     for d in db.collection(_REL_COLL).stream():
@@ -1760,7 +1757,7 @@ def api_relatorios(authorization: str = Header(default="")):
 
 @app.get("/api/relatorios/{doc_id}")
 def api_relatorio(doc_id: str, authorization: str = Header(default="")):
-    _uid, _p = _usuario_leads(authorization)
+    _uid, _p = _usuario_mkt(authorization)
     d = _fw._get_db().collection(_REL_COLL).document(doc_id).get()
     if not d.exists:
         raise HTTPException(status_code=404, detail="nao encontrado")
@@ -1979,3 +1976,88 @@ def ficha_pacientes(q: str = "",
                     "nome": nome,
                     "telefone": (p.get("formatted_phone") or p.get("phone") or "")})
     return {"pacientes": out[:15]}
+
+
+# ======================= PAINEL VIVO DO MARKETING (06/11/2026) =======================
+@app.get("/api/marketing/vivo")
+def api_mkt_vivo(de: str, ate: str, authorization: str = Header(default="")):
+    _uid, _p = _usuario_mkt(authorization)
+    if not (re.match(r"^\d{4}-\d{2}-\d{2}$", de) and re.match(r"^\d{4}-\d{2}-\d{2}$", ate)) or de > ate:
+        raise HTTPException(status_code=400, detail="de/ate AAAA-MM-DD")
+    import painel_mkt as _pm
+    r = _pm.montar(de, ate)
+    g = _eh_gestao(_p)
+    r["eu"] = {"gestao": g, "role": _p.get("role"), "master": _p.get("master") is True}
+    if not g:   # versao do marketing: sem telefone e sem os erros internos do comercial
+        for x in r["leads"]:
+            x["fone_id"] = hmac.new(b"mkt", (x.pop("fone", "") or "").encode(), "sha1").hexdigest()[:10]
+            x.pop("furos", None); x.pop("dono", None)
+    else:
+        for x in r["leads"]:
+            x["fone_id"] = x.get("fone")
+    return r
+
+@app.post("/api/marketing/origem")
+async def api_mkt_origem(request: Request, authorization: str = Header(default="")):
+    _uid, _p = _usuario_mkt(authorization)
+    if not _eh_gestao(_p):
+        raise HTTPException(status_code=403, detail="so gestao corrige origem")
+    b = await request.json()
+    fo = str(b.get("fone") or "")
+    if not re.match(r"^\d{10}$", fo):
+        raise HTTPException(status_code=400, detail="fone")
+    import datetime as _d
+    ref = _fw._get_db().collection("mkt_origem_override").document(fo)
+    if b.get("apagar"):
+        ref.delete(); return {"ok": True, "apagado": fo}
+    doc = {"bucket": b.get("bucket") if b.get("bucket") in ("trafego", "reativacao", "mkt", "rel", "nao") else None,
+           "canal": b.get("canal") or None, "nao_lead": bool(b.get("nao_lead")),
+           "prova": (b.get("prova") or "informada pela gestão")[:200], "por": _p.get("name") or _uid,
+           "em": _d.datetime.utcnow().isoformat() + "Z"}
+    ref.set(doc)
+    return {"ok": True, "fone": fo, **doc}
+
+_NOTA_TIPOS = ("acao", "problema", "bloqueio", "criativo", "orcamento", "outro")
+
+@app.get("/api/marketing/notas")
+def api_mkt_notas(de: str, ate: str, authorization: str = Header(default="")):
+    _uid, _p = _usuario_mkt(authorization)
+    out = []
+    for d in _fw._get_db().collection("mkt_notas").stream():
+        n = d.to_dict() or {}
+        if de <= (n.get("data") or "") <= ate:
+            n["id"] = d.id; n["meu"] = n.get("uid") == _uid
+            hoje = (dt.datetime.utcnow() - dt.timedelta(hours=3)).date().isoformat()
+            n["editavel"] = n["meu"] and (n.get("criado_em") or "")[:10] == hoje
+            n.pop("uid", None); out.append(n)
+    out.sort(key=lambda n: (n.get("data") or "", n.get("criado_em") or ""))
+    return {"ok": True, "notas": out}
+
+@app.post("/api/marketing/notas")
+async def api_mkt_nota_grava(request: Request, authorization: str = Header(default="")):
+    _uid, _p = _usuario_mkt(authorization)
+    if not (_eh_gestao(_p) or _p.get("role") == "marketing"):
+        raise HTTPException(status_code=403, detail="so marketing e gestao anotam")
+    b = await request.json()
+    db = _fw._get_db(); col = db.collection("mkt_notas")
+    hoje = (dt.datetime.utcnow() - dt.timedelta(hours=3)).date().isoformat()
+    if b.get("id"):
+        ref = col.document(str(b["id"])); cur = ref.get()
+        if not cur.exists: raise HTTPException(status_code=404, detail="nota")
+        c = cur.to_dict() or {}
+        if c.get("uid") != _uid or (c.get("criado_em") or "")[:10] != hoje:
+            raise HTTPException(status_code=403, detail="so o autor, no mesmo dia")
+        if b.get("apagar"):
+            ref.delete(); return {"ok": True}
+    else:
+        ref = col.document()
+    data = str(b.get("data") or hoje)[:10]
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", data): raise HTTPException(status_code=400, detail="data")
+    txt = str(b.get("texto") or "").strip()[:1000]
+    if not txt: raise HTTPException(status_code=400, detail="texto")
+    doc = {"data": data, "tipo": b.get("tipo") if b.get("tipo") in _NOTA_TIPOS else "outro", "campanha": str(b.get("campanha") or "")[:30],
+           "texto": txt, "autor": _p.get("name") or "?", "uid": _uid, "lado": "marketing" if _p.get("role") == "marketing" else "gestao"}
+    if not b.get("id"):
+        doc["criado_em"] = (dt.datetime.utcnow() - dt.timedelta(hours=3)).isoformat()[:16]
+    ref.set(doc, merge=True)
+    return {"ok": True, "id": ref.id}

@@ -1,0 +1,117 @@
+<!doctype html><html lang=pt-BR><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>Marketing — IDM</title><style>
+:root{--ink:#1c1c20;--mut:#6b6b73;--line:#e4ddcf;--bg:#fbfaf6;--card:#fff;--gold:#9a7128;--blue:#1d4f6e;--red:#a2341f;--green:#1e7d4f;--pur:#7a4fa0;--ochre:#b7892f}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--ink);font-size:13px}
+.top{position:sticky;top:0;z-index:5;display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:8px 12px;background:#062621;color:#fff}
+.top b{font-size:14px;margin-right:6px}.top button,.top select,.top input{border:1px solid #c9b48a;background:transparent;color:#fff;border-radius:6px;padding:5px 9px;font-size:12px;cursor:pointer}
+.top button.on{background:#c9b48a;color:#062621;font-weight:700}.top input{color:#fff;color-scheme:dark}.top .s{font-size:11px;color:#c9d3cf;margin-left:auto}
+.wrap{padding:12px;max-width:1400px;margin:0 auto}h2{font-size:12px;letter-spacing:1.2px;text-transform:uppercase;color:var(--gold);margin:16px 0 6px;border-bottom:1px solid var(--line);padding-bottom:4px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px}.kpi{background:var(--card);border:1px solid var(--line);border-top:4px solid var(--blue);border-radius:6px;padding:8px 10px}
+.kpi .v{font-size:20px;font-weight:700}.kpi .l{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.6px}.kpi .s{font-size:11px;color:var(--mut);margin-top:3px}
+.kpi.good{border-top-color:var(--green)}.kpi.alert{border-top-color:var(--red)}.kpi.gold{border-top-color:var(--gold)}
+table{width:100%;border-collapse:collapse;background:var(--card)}th,td{padding:4px 6px;border-bottom:1px solid var(--line);text-align:left;font-size:12px;vertical-align:top}
+th{background:#f1ece2;font-size:11px}td.n,th.n{text-align:right;white-space:nowrap}.pc{color:var(--mut);font-size:10.5px;margin-left:3px}tr.tt td{background:#f3ecdc;font-weight:700}
+.quadros{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:8px}.q{background:var(--card);border:1px solid var(--line);border-top:4px solid var(--c);border-radius:6px;padding:8px}
+.q .t{font-weight:700}.q .ln{display:flex;justify-content:space-between;font-size:12px;padding:1.5px 0;border-bottom:1px dotted #eee}.q .ln b{text-align:right}
+.sw{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px}.pill{display:inline-block;padding:1px 6px;border-radius:9px;font-size:10.5px;background:#eee}
+.p-ok{background:#dcefe3;color:#1e5e3c}.p-war{background:#f6e6c4;color:#7a5410}.p-bad{background:#f6d6d0;color:#8a2a1a}.p-blue{background:#dbe7ef;color:#1d4f6e}
+.note{font-size:11.5px;color:#3a3a40;background:#fffaf0;border:1px solid #efe3c8;border-radius:5px;padding:6px 9px;margin-top:6px}
+.grid2{display:grid;grid-template-columns:2fr 1fr;gap:10px}@media(max-width:900px){.grid2{grid-template-columns:1fr}}
+.notas .n{border-left:3px solid var(--gold);background:var(--card);padding:5px 8px;margin-bottom:5px;font-size:12px}.notas .n .h{font-size:10.5px;color:var(--mut)}
+.notas form{display:grid;gap:5px;background:var(--card);border:1px solid var(--line);padding:8px;border-radius:6px}.notas input,.notas select,.notas textarea{font:inherit;padding:5px;border:1px solid var(--line);border-radius:4px}
+button.sm{font-size:11px;padding:2px 7px;border:1px solid var(--line);background:#fff;border-radius:4px;cursor:pointer}.msg{padding:24px}
+iframe{border:0;width:100%;height:calc(100vh - 50px);background:#fff;display:block}.mut{color:var(--mut)}
+</style></head><body>
+<div class=top><b>📈 Marketing</b><button id=tb-vivo class=on onclick="aba('vivo')">Ao vivo</button><button id=tb-fech onclick="aba('fech')">Fechamentos</button>
+<span id=perbox><select id=per onchange="perChange()"><option value=mes>Mês atual</option><option value=sem>Semana atual (dom–sáb)</option><option value=mesant>Mês anterior</option><option value=custom>Período…</option></select>
+<input type=date id=de style="display:none"><input type=date id=ate style="display:none"><button onclick="carrega()">Atualizar</button></span>
+<span id=fechbt style="display:none"></span><span class=s id=st>carregando…</span></div>
+<div id=vivo class=wrap><div class=msg>Carregando…</div></div><div id=fech style="display:none"></div>
+<script>
+const APPMODE=!!window.IDM_APP;let _tok=null,_tokT=0,_esp=[];
+window.addEventListener('message',e=>{if(!APPMODE||e.origin!==window.IDM_ORIGIN)return;if(e.data&&e.data.t==='idm-token'){_tok=e.data.token;_tokT=Date.now();_esp.splice(0).forEach(f=>f(_tok));}});
+function pedeToken(f){return new Promise(res=>{if(!f&&_tok&&Date.now()-_tokT<40*60e3)return res(_tok);_esp.push(res);try{parent.postMessage({t:'idm-token-req'},window.IDM_ORIGIN);}catch(e){}setTimeout(()=>{const i=_esp.indexOf(res);if(i>=0){_esp.splice(i,1);res(null);}},8000);});}
+async function api(p,body){const o=b=>({method:body?'POST':'GET',headers:Object.assign({Authorization:'Bearer '+(b||'')},body?{'Content-Type':'application/json'}:{}),body:body?JSON.stringify(body):undefined});
+let t=await pedeToken(false);let r=await fetch(p,o(t));if(r.status===401){t=await pedeToken(true);r=await fetch(p,o(t));}if(!r.ok){let d='';try{d=(await r.json()).detail}catch(e){}throw new Error(r.status+' '+(d||''));}return r.json();}
+const $=id=>document.getElementById(id);const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const brl=v=>'R$ '+(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});const pc=(a,b)=>b?Math.round(a/b*100)+'%':'—';
+const hojeSP=()=>new Date(Date.now()-3*3600e3).toISOString().slice(0,10);
+function periodo(){const v=$('per').value,h=hojeSP(),d=new Date(h+'T12:00:00Z');
+ if(v==='mes')return[h.slice(0,8)+'01',h];
+ if(v==='sem'){const x=new Date(d);x.setUTCDate(d.getUTCDate()-d.getUTCDay());return[x.toISOString().slice(0,10),h];}
+ if(v==='mesant'){const x=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),0));return[x.toISOString().slice(0,8)+'01',x.toISOString().slice(0,10)];}
+ return[$('de').value||h.slice(0,8)+'01',$('ate').value||h];}
+function perChange(){const c=$('per').value==='custom';$('de').style.display=$('ate').style.display=c?'':'none';if(!c)carrega();}
+const COR={trafego:'#1d4f6e',reativacao:'#7a4fa0',mkt:'#b7892f',rel:'#1e7d4f',nao:'#a2341f'};
+function calc(s){const r={leads:s.length,opp:0,ag:0,at:0,on:0,pr:0,orc:0,orcv:0,won:0,wonv:0,opnv:0,ag_on:0,ag_pr:0,at_on:0,at_pr:0};
+ s.forEach(x=>{r.opp+=x.opp?1:0;r.ag+=x.ag?1:0;r.at+=x.at?1:0;r.on+=x.on?1:0;r.pr+=x.pr?1:0;if(x.at&&x.orc){r.orc++;r.orcv+=x.orcv;}r.won+=x.won;r.wonv+=x.wonv;r.opnv+=x.opnv;
+ if(x.porta==='on'){r.ag_on++;if(x.at)r.at_on++;}else if(x.porta==='pr'){r.ag_pr++;if(x.at)r.at_pr++;}});return r;}
+function semanas(de,ate){const out=[];let d=new Date(de+'T12:00:00Z');let i=1;while(d.toISOString().slice(0,10)<=ate){const ini=d.toISOString().slice(0,10);const f=new Date(d);f.setUTCDate(d.getUTCDate()+(6-d.getUTCDay()));let fim=f.toISOString().slice(0,10);if(fim>ate)fim=ate;
+ out.push({s:'S'+i,ini,fim,rot:ini.slice(8)+'/'+ini.slice(5,7)+'–'+fim.slice(8)+'/'+fim.slice(5,7)});i++;d=new Date(fim+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+1);}return out;}
+let D=null,NOTAS=[];
+async function carrega(){const [de,ate]=periodo();$('st').textContent='calculando '+de.split('-').reverse().join('/')+' a '+ate.split('-').reverse().join('/')+'…';
+ try{D=await api('/api/marketing/vivo?de='+de+'&ate='+ate);try{NOTAS=(await api('/api/marketing/notas?de='+de+'&ate='+ate)).notas}catch(e){NOTAS=[]}render();$('st').textContent='atualizado '+D.gerado.replace('T',' ');}
+ catch(e){$('vivo').innerHTML='<div class=msg>Sem acesso ou erro ('+esc(e.message)+'). Entre pelo app IDM.</div>';$('st').textContent='';}}
+function render(){const L=D.leads,G=D.eu.gestao,B={};D.buckets.forEach(([k])=>B[k]=L.filter(x=>x.bucket===k));const M={};for(const k in B)M[k]=calc(B[k]);const T=calc(L);
+ const md=(D.meta&&D.meta.dias)||[];const gasto=c=>md.filter(r=>c(r.campanha)).reduce((a,r)=>a+r.gasto,0);const isCap=n=>D.wa_cap.some(c=>(n||'').includes(c.replace('CAM 0','CAM 0'))||new RegExp('CAM\\s*0?'+c.slice(-1)+'\\b').test(n||''));
+ const isRea=n=>/CAM\s*0?9\b/.test(n||'');const gTot=md.reduce((a,r)=>a+r.gasto,0),gCap=gasto(isCap),gRea=gasto(isRea);
+ const novCap=md.filter(r=>isCap(r.campanha)).reduce((a,r)=>a+r.novos_contatos,0),novRea=md.filter(r=>isRea(r.campanha)).reduce((a,r)=>a+r.novos_contatos,0);
+ const meses=new Set();let d0=new Date(D.de+'T12:00:00Z');while(d0.toISOString().slice(0,10)<=D.ate){meses.add(d0.toISOString().slice(0,7));d0.setUTCDate(d0.getUTCDate()+1);}
+ const contr=D.contrato*meses.size,inv=contr+gTot;const ant=D.antigos.reduce((a,x)=>a+x.valor,0);const TR=B.trafego;const resp=TR.filter(x=>x.respondeu).length;
+ const nErr=L.filter(x=>(x.furos||[]).length).length;
+ let h=`<div class=kpis><div class='kpi good'><div class=l>Vendido pelo tráfego</div><div class=v>${brl(M.trafego.wonv)}</div><div class=s>${M.trafego.won} vendas · ${TR.length} leads de captação</div></div>
+ <div class='kpi good'><div class=l>Retorno oficial do tráfego</div><div class=v>${(M.trafego.wonv/inv).toFixed(1).replace('.',',')}×</div><div class=s>venda ÷ (contrato ${brl(contr)} + Meta ${brl(gTot)})<br>só mídia: ${gCap?(M.trafego.wonv/gCap).toFixed(1).replace('.',','):'—'}× · teto c/ orgânico: ${((M.trafego.wonv+M.mkt.wonv)/inv).toFixed(1).replace('.',',')}×</div></div>
+ <div class=kpi><div class=l>Investido no Meta</div><div class=v>${brl(gTot)}</div><div class=s>captação ${brl(gCap)} · reativação ${brl(gRea)}${D.meta.ok?'':' · <b>Meta indisponível</b>'}</div></div>
+ <div class='kpi alert'><div class=l>Leads de tráfego que não passaram da msg do anúncio</div><div class=v>${pc(TR.length-resp,TR.length)}</div><div class=s>${TR.length-resp} de ${TR.length}</div></div>
+ <div class='kpi gold'><div class=l>Vendas a clientes novos (LEADS)</div><div class=v>${brl(T.wonv+ant)}</div><div class=s>${T.won} de leads do período: ${brl(T.wonv)} + ${D.antigos.length} de leads anteriores: ${brl(ant)}</div></div>
+ ${G?`<div class='kpi alert'><div class=l>Leads com falha de condução</div><div class=v>${nErr}</div><div class=s>de ${L.length} leads (origem não perguntada, sem resposta, sem tarefa…)</div></div>`:''}</div>`;
+ // conversao por origem
+ const cv=r=>`<td class=n>${r.leads}</td><td class=n>${r.ag}<span class=pc>${pc(r.ag,r.leads)}</span></td><td class=n>${r.at}<span class=pc>${pc(r.at,r.leads)}</span></td><td class=n>${r.orc}<span class=pc>${pc(r.orc,r.leads)}</span></td><td class=n><b>${r.won}</b></td><td class=n><b>${r.leads?(r.won/r.leads*100).toFixed(1).replace('.',','):0}%</b></td><td class=n>${brl(r.wonv)}</td><td class=n>${r.won?brl(r.wonv/r.won):'—'}</td><td class=n>${r.leads?brl(r.wonv/r.leads):'—'}</td><td class=n>${pc(r.wonv,T.wonv)}</td>`;
+ h+=`<h2>Conversão por origem — leads do período × vendas (orçamento ganho)</h2><table><tr><th>Origem</th><th class=n>Leads</th><th class=n>Agendaram</th><th class=n>Atendidos</th><th class=n>Orçamentos</th><th class=n>Vendas</th><th class=n>% lead→venda</th><th class=n>R$ vendido</th><th class=n>Ticket</th><th class=n>R$/lead</th><th class=n>% do R$</th></tr>`+
+ D.buckets.map(([k,n])=>`<tr><td><i class=sw style='background:${COR[k]}'></i>${n}</td>${cv(M[k])}</tr>`).join('')+`<tr class=tt><td>Total — leads do período</td>${cv(T)}</tr>`+
+ `<tr><td class=mut>+ leads de períodos anteriores que compraram agora (${D.antigos.map(x=>esc(x.nome)).join(', ')||'—'})</td><td class=n>—</td><td></td><td></td><td></td><td class=n>${D.antigos.length}</td><td></td><td class=n>${brl(ant)}</td><td></td><td></td><td></td></tr><tr class=tt><td>Vendas a clientes novos (LEADS)</td><td></td><td></td><td></td><td></td><td class=n>${T.won+D.antigos.length}</td><td></td><td class=n>${brl(T.wonv+ant)}</td><td></td><td></td><td></td></tr></table>`;
+ // quadros
+ const S=semanas(D.de,D.ate);
+ const mini=s=>`<table style='margin-top:4px'><tr><th>Semana</th><th class=n>Leads</th><th class=n>Ag.</th><th class=n>At.</th><th class=n>Vendas</th><th class=n>R$</th></tr>`+S.map(w=>{const r=calc(s.filter(x=>x.chegada>=w.ini&&x.chegada<=w.fim));return `<tr><td>${w.s} <span class=mut>${w.rot}</span></td><td class=n>${r.leads}</td><td class=n>${r.ag}</td><td class=n>${r.at}</td><td class=n>${r.won}</td><td class=n>${r.wonv?Math.round(r.wonv).toLocaleString('pt-BR'):'—'}</td></tr>`}).join('')+`</table>`;
+ const ln=(a,b)=>`<div class=ln><span>${a}</span><b>${b}</b></div>`;
+ h+=`<h2>Origem dos leads — ${D.de.split('-').reverse().join('/')} a ${D.ate.split('-').reverse().join('/')}, com as semanas (dom–sáb) dentro de cada quadro</h2><div class=quadros>`+D.buckets.map(([k,n])=>{const r=M[k];let ex='';
+  if(k==='trafego')ex=ln('Investimento captação',brl(gCap))+ln('Custo por lead',r.leads?brl(gCap/r.leads):'—')+ln('Novos contatos Meta × achados',novCap+' × '+r.leads);
+  if(k==='reativacao')ex=ln('Investimento',brl(gRea))+ln('Novos contatos Meta × achados',novRea+' × '+r.leads);
+  if(k==='mkt')ex=`<table style='margin:4px 0'><tr><th>Canal</th><th class=n>Leads</th><th class=n>Ag.</th><th class=n>Vendas · R$</th></tr>`+D.canais.map(c=>{const rr=calc(B.mkt.filter(x=>x.canal===c));return `<tr><td>${c}</td><td class=n>${rr.leads}</td><td class=n>${rr.ag}</td><td class=n>${rr.won}${rr.wonv?' · '+Math.round(rr.wonv).toLocaleString('pt-BR'):''}</td></tr>`}).join('')+`</table>`;
+  return `<div class=q style='--c:${COR[k]}'><div class=t>${n}</div>`+ln('Leads',r.leads)+ln('Com oportunidade no CRM',r.opp+`<span class=pc>${pc(r.opp,r.leads)}</span>`)+ln('Agendaram',r.ag+`<span class=pc>${pc(r.ag,r.leads)}</span>`)+
+  ln('· porta on-line / clínica',r.ag_on+' / '+r.ag_pr)+ln('Atendidos',r.at+`<span class=pc>${pc(r.at,r.ag)} dos agend.</span>`)+ln('Orçamentos de atendidos',r.orc+' · '+brl(r.orcv))+ln('<b>Vendas</b>',`${r.won} · ${brl(r.wonv)}`)+ln('Orçamento em aberto',brl(r.opnv))+ex+mini(B[k])+`</div>`}).join('')+`</div>`;
+ // grafico
+ const dias=[];let dd=new Date(D.de+'T12:00:00Z');while(dd.toISOString().slice(0,10)<=D.ate){dias.push(dd.toISOString().slice(0,10));dd.setUTCDate(dd.getUTCDate()+1);}
+ const nov={},ach={},gas={};md.forEach(r=>{gas[r.dia]=(gas[r.dia]||0)+r.gasto;if(isCap(r.campanha)||isRea(r.campanha))nov[r.dia]=(nov[r.dia]||0)+r.novos_contatos;});
+ L.filter(x=>x.bucket==='trafego'||x.bucket==='reativacao').forEach(x=>ach[x.chegada]=(ach[x.chegada]||0)+1);
+ const W=Math.max(600,dias.length*34),H=190,pl=26,pb=40,pt=14,bw=(W-pl-6)/dias.length,mx=Math.max(1,...dias.map(d=>Math.max(nov[d]||0,ach[d]||0)));const yy=v=>pt+(H-pt-pb)*(1-v/mx);
+ let sv=`<svg viewBox='0 0 ${W} ${H}' width='100%' style='background:#fff;border:1px solid var(--line)'>`;
+ dias.forEach((d,i)=>{const x0=pl+i*bw+bw*.15,w=bw*.33;[[nov[d]||0,'#c9b48a'],[ach[d]||0,'#1d4f6e']].forEach(([v,c],j)=>{const xx=x0+j*(w+1);if(v)sv+=`<rect x='${xx}' y='${yy(v)}' width='${w}' height='${H-pb-yy(v)}' fill='${c}' rx=1.5 />`;sv+=`<text x='${xx+w/2}' y='${v?yy(v)-2:H-pb-2}' font-size=8 text-anchor=middle>${v}</text>`;});
+  sv+=`<text x='${pl+i*bw+bw/2}' y='${H-pb+11}' font-size=8.5 text-anchor=middle>${d.slice(8)}</text><text x='${pl+i*bw+bw/2}' y='${H-pb+22}' font-size=7.5 text-anchor=middle fill='#888'>${Math.round(gas[d]||0)}</text>`;
+  const nn=NOTAS.filter(n=>n.data===d);if(nn.length)sv+=`<g><title>${esc(nn.map(n=>n.autor+': '+n.texto).join('\n'))}</title><circle cx='${pl+i*bw+bw/2}' cy='${H-8}' r=5 fill='#a2341f'/><text x='${pl+i*bw+bw/2}' y='${H-5.5}' font-size=7 fill='#fff' text-anchor=middle>${nn.length}</text></g>`;});
+ sv+=`</svg>`;
+ h+=`<div class=grid2><div><h2>Meta × WhatsApp, dia a dia (captação + reativação)</h2><div class=mut style='font-size:11px'><i class=sw style='background:#c9b48a'></i>novos contatos no Meta <i class=sw style='background:#1d4f6e;margin-left:8px'></i>leads achados no WhatsApp · linha de baixo = gasto do dia (R$) · <span style='color:#a2341f'>●</span> = anotação (passe o mouse)</div>${sv}
+ <h2>Campanhas — Gerenciador × resultado</h2><table><tr><th>Campanha</th><th class=n>Gasto</th><th class=n>Impressões</th><th class=n>Novos contatos</th><th class=n>Custo/contato</th></tr>`+((D.meta.camp||[]).map(c=>`<tr><td>${esc(c.campanha)}</td><td class=n>${brl(c.gasto)}</td><td class=n>${(c.impressoes||0).toLocaleString('pt-BR')}</td><td class=n>${c.novos_contatos}</td><td class=n>${c.novos_contatos?brl(c.gasto/c.novos_contatos):'—'}</td></tr>`).join('')||'<tr><td colspan=5 class=mut>sem dados do Meta</td></tr>')+`</table></div>
+ <div class=notas><h2>Anotações do período</h2>${notasForm()}<div id=nl>${NOTAS.slice().reverse().map(n=>`<div class=n><div class=h>${n.data.split('-').reverse().join('/')} · ${esc(n.tipo)}${n.campanha?' · '+esc(n.campanha):''} · <b>${esc(n.autor)}</b> (${esc(n.lado)})${n.editavel?` <button class=sm onclick="apagaNota('${n.id}')">apagar</button>`:''}</div>${esc(n.texto)}</div>`).join('')||'<div class=mut>Nenhuma anotação no período.</div>'}</div></div></div>`;
+ // lista de leads
+ const ord={trafego:0,reativacao:1,mkt:2,rel:3,nao:4};const LL=L.slice().sort((a,b)=>ord[a.bucket]-ord[b.bucket]||a.chegada.localeCompare(b.chegada));
+ h+=`<h2>Leads do período — ${L.length} (${D.buckets.map(([k,n])=>B[k].length+' '+n.split(' —')[0].toLowerCase()).join(' · ')})</h2><table><tr><th>Chegou</th><th>Lead</th><th>Origem · prova</th><th>Etapa CRM</th><th class=n>1ª resp.</th><th>Situação</th><th>Resumo da conversa (IA)</th>${G?'<th></th>':''}</tr>`+
+ LL.map(x=>`<tr><td>${x.chegada.slice(8)}/${x.chegada.slice(5,7)}</td><td><b>${esc(x.nome)}</b></td><td><i class=sw style='background:${COR[x.bucket]}'></i>${esc((D.buckets.find(b=>b[0]===x.bucket)||[])[1])}${x.canal?' · '+esc(x.canal):''}<br><span class=mut>${esc(x.prova)}${x.campanha?' · '+esc(x.campanha):''}</span></td>
+ <td>${esc(x.etapa||'sem oportunidade')}${x.dono?'<br><span class=mut>dono: '+esc(x.dono)+'</span>':''}</td><td class=n>${x.primeira_resp_min==null?'—':x.primeira_resp_min<60?Math.round(x.primeira_resp_min)+' min':Math.round(x.primeira_resp_min/60)+' h'}</td>
+ <td>${x.won?`<span class='pill p-ok'>comprou ${brl(x.wonv)}</span>`:x.at?`<span class='pill p-blue'>atendido</span>`:x.ag?`<span class='pill p-blue'>agendou</span>`:x.respondeu?`<span class='pill p-war'>em conversa</span>`:`<span class='pill p-bad'>sem retorno</span>`}${x.opnv?`<br><span class=mut>orç. aberto ${brl(x.opnv)}</span>`:''}${x.prox&&x.prox.length?`<br><span class=mut>próx.: ${esc(x.prox[0])}</span>`:''}</td>
+ <td style='max-width:420px'>${esc(x.resumo)}${G&&(x.furos||[]).length?`<br><span class='pill p-bad'>${esc(x.furos.join(', '))}</span>`:''}</td>${G?`<td><button class=sm onclick="corrige('${x.fone_id}','${esc(x.nome).replace(/'/g,'')}')">corrigir origem</button></td>`:''}</tr>`).join('')+`</table>`;
+ if(G&&D.fora.length)h+=`<h2>Não são leads — contatos excluídos da contagem (${D.fora.length})</h2><div class=note>${D.fora.map(f=>esc(f.nome)+' <span class=mut>('+esc(f.motivo)+')</span>').join(' · ')}</div>`;
+ h+=`<div class=note>Painel calculado na hora a partir do IDM (conversas, CRM, orçamentos e agenda do Clinic Expert, Meta). Prova de origem = 1ª mensagem do lead; quando não há, vale a origem declarada na conversa; correções manuais da gestão prevalecem. Venda = orçamento ganho. Contrato do marketing entra cheio por mês do período.</div>`;
+ $('vivo').innerHTML=h;}
+function notasForm(){if(!(D.eu.gestao||D.eu.role==='marketing'))return '';const h=hojeSP();return `<form onsubmit="return grava(event)"><div style='display:flex;gap:5px'><input type=date id=nd value='${h}' style='flex:1'><select id=nt><option value=acao>ação</option><option value=problema>problema</option><option value=bloqueio>bloqueio de anúncio</option><option value=criativo>troca de criativo</option><option value=orcamento>orçamento</option><option value=outro>outro</option></select><input id=nc placeholder='campanha (opcional)' style='width:110px'></div><textarea id=nx rows=2 placeholder='O que foi feito ou o que aconteceu…' required></textarea><button class=sm>Anotar</button></form>`;}
+async function grava(e){e.preventDefault();try{await api('/api/marketing/notas',{data:$('nd').value,tipo:$('nt').value,campanha:$('nc').value,texto:$('nx').value});carrega();}catch(err){alert('Erro: '+err.message);}return false;}
+async function apagaNota(id){if(!confirm('Apagar esta anotação?'))return;await api('/api/marketing/notas',{id,apagar:true});carrega();}
+async function corrige(fone,nome){const op=prompt('Corrigir origem de '+nome+'\n1 = Tráfego pago\n2 = Reativação\n3 = Orgânico (diga o canal depois)\n4 = Indicação/relacionamento\n5 = Origem não informada\n6 = NÃO É LEAD (tirar da contagem)\n0 = desfazer correção');if(op===null)return;
+ const map={'1':'trafego','2':'reativacao','3':'mkt','4':'rel','5':'nao'};let body={fone};if(op==='0')body.apagar=true;else if(op==='6')body.nao_lead=true;else if(map[op]){body.bucket=map[op];if(op==='3')body.canal=prompt('Canal: Bio, Direct/Instagram, Site, Google ou IA (ChatGPT)','IA (ChatGPT)');body.prova=prompt('Como você sabe? (fica registrado)','informada pelo Xandão');}else return;
+ try{await api('/api/marketing/origem',body);carrega();}catch(e){alert('Erro: '+e.message);}}
+// ---- fechamentos
+let fechOk=false;async function aba(a){$('tb-vivo').classList.toggle('on',a==='vivo');$('tb-fech').classList.toggle('on',a==='fech');$('vivo').style.display=a==='vivo'?'':'none';$('fech').style.display=a==='fech'?'':'none';$('perbox').style.display=a==='vivo'?'':'none';$('fechbt').style.display=a==='fech'?'':'none';
+ if(a==='fech'&&!fechOk){fechOk=true;try{const l=await api('/api/relatorios');const bt=$('fechbt');l.itens.forEach(i=>{const b=document.createElement('button');b.textContent=i.titulo;b.onclick=()=>abreF(i.id,b);bt.appendChild(b);});if(l.itens[0])abreF(l.itens[0].id,bt.querySelector('button'));else $('fech').innerHTML='<div class=msg>Nenhum fechamento publicado.</div>';}catch(e){$('fech').innerHTML='<div class=msg>Erro: '+esc(e.message)+'</div>';}}}
+async function abreF(id,b){const d=await api('/api/relatorios/'+encodeURIComponent(id));$('fech').innerHTML='<iframe id=fr></iframe>';$('fr').srcdoc=d.html;document.querySelectorAll('#fechbt button').forEach(x=>x.classList.toggle('on',x===b));}
+carrega();
+</script></body></html>

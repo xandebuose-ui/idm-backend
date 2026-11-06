@@ -64,3 +64,21 @@ def status():
         return {"ok": False, "http": e.code, "erro": body}
     except Exception as e:
         return {"ok": False, "erro": str(e)[:300]}
+
+def insights_por_dia(desde, ate):
+    """Gasto e novos contatos por campanha POR DIA (painel vivo do marketing)."""
+    out, after = [], None
+    for _ in range(20):
+        p = {"level": "campaign", "time_increment": 1, "fields": "campaign_name,spend,actions",
+             "time_range": json.dumps({"since": desde, "until": ate}), "limit": 500}
+        if after:
+            p["after"] = after
+        j = _get("%s/insights" % ACT, p)
+        for row in j.get("data", []):
+            out.append({"dia": row.get("date_start"), "campanha": row.get("campaign_name"),
+                        "gasto": round(float(row.get("spend") or 0), 2),
+                        "novos_contatos": _acoes(row.get("actions"), "onsite_conversion.messaging_first_reply")})
+        after = ((j.get("paging") or {}).get("cursors") or {}).get("after") if (j.get("paging") or {}).get("next") else None
+        if not after:
+            break
+    return out

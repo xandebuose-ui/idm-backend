@@ -270,6 +270,14 @@ def montar(de, ate, versao="gestao"):
 
 def debug(fo, de, ate):
     db = _fw._get_db()
+    if fo == "__stats":
+        from collections import Counter
+        crm = _crm_db(); leads = _leads_db()
+        orig = Counter(str(o.get("origem")) for v in crm.values() for o in v)
+        dias = Counter((l.get("data_chegada_sp") or "")[:10] for l in leads if de <= (l.get("data_chegada_sp") or "") <= ate)
+        exist = {f: db.collection("escuta_conversas").document(f).get().exists for f in ("1180643437", "1196562999", "1150840449", "1145936363")}
+        return {"crm_origem": orig.most_common(40), "chegadas_por_dia": sorted(dias.items()), "n_leads": len(leads), "conv_existe": exist,
+                "crm_campos": sorted({k for v in list(crm.values())[:50] for o in v for k in o})}
     d = db.collection(COLL_LEADS).document(fo).get()
     l = d.to_dict() if d.exists else {}
     ref = db.collection("escuta_conversas").document(fo)

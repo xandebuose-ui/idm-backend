@@ -105,9 +105,7 @@ _FORA = ("fornecedor_parceiro", "teste_interno", "equipe_interna", "spam")
 
 _CRM_ORIG = [(re.compile(r"indica|relacionamento|pr[eé]dio|feira|^dayane mafra$", re.I), ("rel", None)),
              (re.compile(r"chat ?gpt|\bia\b", re.I), ("mkt", "IA (ChatGPT)")),
-             (re.compile(r"google", re.I), ("mkt", "Google")), (re.compile(r"\bsite\b", re.I), ("mkt", "Site")),
-             (re.compile(r"bio", re.I), ("mkt", "Bio")), (re.compile(r"instagram", re.I), ("mkt", "Direct/Instagram")),
-             (re.compile(r"tr[aá]fego|an[uú]ncio|facebook", re.I), ("trafego", None))]
+             ]  # demais origens do CRM nao valem como prova (v3)
 _CRM_BASE = re.compile(r"j[aá] [eé] cliente|base|cliente antig|renova|fidelidade", re.I)
 
 def _crm_origem(ops):
@@ -343,5 +341,7 @@ def debug(fo, de, ate):
             pac = {k: (v if not isinstance(v, (dict, list)) else "...") for k, v in arr[0].items() if k not in ("name", "phone", "email", "cpf", "document", "annotation", "address")}
     except Exception as e:
         pac = {"erro": str(e)[:100]}
-    return {"lead": keep, "paciente": pac, "comprador": _cruz._eh_comprador(fo), "msgs": msgs[:12], "n_msgs": len(msgs),
+    vend = [{k: v.get(k) for k in ("status", "data", "valor_centavos", "atualizado_em_ce", "criado_em_ce", "tipo", "id", "uuid", "origem_doc", "comprador")}
+            for v in (_vendas_db().get(fo) or [])]
+    return {"lead": keep, "paciente": pac, "vendas": vend, "comprador": _cruz._eh_comprador(fo), "msgs": msgs[:12], "n_msgs": len(msgs),
             "reclique": _reclique(fo, de, ate)}

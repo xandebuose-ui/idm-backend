@@ -539,7 +539,7 @@ def _backfill_run(dias):
         if not db or not _fw.get_token():
             BACKFILL["erro_lista"] = "sem firestore ou sem cracha"; return
         desde = _utcnow() - dt.timedelta(days=dias)
-        ccs, err = _lista(desde, incluir_sem_data=True)
+        ccs, err = _lista(desde, cap=max(LISTA_CAP, 25000), incluir_sem_data=True)  # 06/11: ha >10 mil canais; com cap 5000 a recarga nao via o fim da lista
         BACKFILL["conversas"] = len(ccs)
         BACKFILL["erro_lista"] = err
         for cc in ccs:

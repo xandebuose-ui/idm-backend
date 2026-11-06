@@ -329,6 +329,18 @@ def debug(fo, de, ate):
                     achou.setdefault(a, []).append({"id": d.id, "chegada": x.get("data_chegada_sp"), "nome": x.get("nome")})
         conv = {a: [c.id for c in db.collection("escuta_conversas").stream() if a[-8:] in c.id] for a in alvos[:3]}
         return {"achou": achou, "conv": conv}
+    if fo == "__crmorig":
+        from collections import Counter, defaultdict
+        porm = defaultdict(Counter)
+        for v in _crm_db().values():
+            for o in v:
+                m = str(o.get("criado_em_ce") or "")[:7] or "sem data"
+                s = str(o.get("origem") or "").strip() or "None"
+                porm[m]["_total"] += 1
+                porm[m][s if s in ("Instagram", "None", "Indicação", "Já é cliente", "Outro") else "demais"] += 1
+                if s == "Instagram":
+                    porm[m]["IG:" + str(o.get("pipeline"))[:20]] += 1
+        return {k: dict(v) for k, v in sorted(porm.items())}
     if fo == "__stats":
         from collections import Counter
         crm = _crm_db(); leads = _leads_db()

@@ -319,6 +319,16 @@ def montar(de, ate, versao="gestao"):
 
 def debug(fo, de, ate):
     db = _fw._get_db()
+    if fo.startswith("__busca:"):
+        alvos = fo.split(":", 1)[1].split(",")
+        achou = {}
+        for d in db.collection(COLL_LEADS).stream():
+            for a in alvos:
+                if a[-8:] in d.id or a[-8:] in str((d.to_dict() or {}).get("fone_raw") or ""):
+                    x = d.to_dict() or {}
+                    achou.setdefault(a, []).append({"id": d.id, "chegada": x.get("data_chegada_sp"), "nome": x.get("nome")})
+        conv = {a: [c.id for c in db.collection("escuta_conversas").stream() if a[-8:] in c.id] for a in alvos[:3]}
+        return {"achou": achou, "conv": conv}
     if fo == "__stats":
         from collections import Counter
         crm = _crm_db(); leads = _leads_db()

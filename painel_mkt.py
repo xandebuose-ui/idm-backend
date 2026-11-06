@@ -150,6 +150,43 @@ def _data_ganho(v):
         if x: return x.date().isoformat()
     return v.get("data") or ""
 
+def _pac_criado(fo):
+    """Data (SP, ISO) do cadastro do paciente na CE, ou ''. Cache em Firestore (nao muda)."""
+    def f():
+        db = _fw._get_db()
+        ref = db.collection("mkt_pac_cache").document(fo)
+        s = ref.get()
+        if s.exists:
+            return (s.to_dict() or {}).get("criado", "")
+        cri = ""
+        try:
+            for fmt in (fo[:2] + "9" + fo[2:], fo):
+                d0 = mf.api("patients?phone=" + urllib.parse.quote(fmt))
+                arr = (d0.get("data") or []) if isinstance(d0, dict) else []
+                if arr:
+                    cri = str(arr[0].get("created_at") or "")[:10]; break
+        except Exception:
+            return ""  # nao grava cache em erro
+        ref.set({"criado": cri, "em": dt.datetime.utcnow().isoformat()[:19]})
+        return cri
+    return _cache("pac:" + fo, 86400, f)
+
+def _abertura(fo, ch):
+    """(quem abriu a conversa no dia/mes da chegada, lead mandou algo legivel?)"""
+    def f():
+        ref = _fw._get_db().collection("escuta_conversas").document(fo)
+        ms = []
+        for x in ref.collection("msgs_" + ch[:7]).stream():
+            m = x.to_dict() or {}
+            if m.get("de") in ("lead", "equipe"):
+                ms.append((str(m.get("data")), m.get("de"), m.get("tipo")))
+        ms.sort()
+        ms = [m for m in ms if (_sp(m[0]) or dt.datetime(2000, 1, 1)).date().isoformat() >= ch] or ms
+        quem = ms[0][1] if ms else None
+        legivel = any(m[1] == "lead" and m[2] not in ("unsupported",) for m in ms)
+        return quem, legivel
+    return _cache("ab:%s:%s" % (fo, ch), 600, f)
+
 # ------------------------------------------------------------------ montagem
 def montar(de, ate, versao="gestao"):
     leads, crm, vendas, ovr = _leads_db(), _crm_db(), _vendas_db(), _ovr_db()
@@ -160,7 +197,8 @@ def montar(de, ate, versao="gestao"):
         ch = l.get("data_chegada_sp")
         fo = l.get("fone")
         reclique = False
-        if ch and ch < de and (l.get("origem_codigo") == "trafego_pago") and (_sp(l.get("ultima_msg_em")) or dt.datetime(2000, 1, 1)).date().isoformat() >= de \
+        if ch and ch < de and (l.get("origem_codigo") == "trafego_pago" or (l.get("ia") or {}).get("origem_declarada") == "anuncio"
+                              or (l.get("ia") or {}).get("tipo_contato") == "lead") and (_sp(l.get("ultima_msg_em")) or dt.datetime(2000, 1, 1)).date().isoformat() >= de \
                 and not any((v.get("status") == "won") for v in (vendas.get(fo) or [])):
             rc = _reclique(fo, de, ate)
             if rc:
@@ -176,13 +214,23 @@ def montar(de, ate, versao="gestao"):
         o_ = ovr.get(fo) or {}
         if (ganhou_antes or (_cruz._eh_comprador(fo) and not opp_lead)) and not o_.get("bucket"):
             fora.append({"nome": l.get("nome"), "motivo": "cliente da base"}); continue
-        if not l.get("primeira_msg_lead") and not l.get("external_id") and not o_.get("bucket"):
-            fora.append({"nome": l.get("nome"), "motivo": "sem conteúdo legível (mensagem que o sistema não exibe)"}); continue
+        quem, legivel = (None, True)
+        if not o_.get("bucket") and not reclique and not l.get("primeira_msg_lead"):
+            quem, legivel = _abertura(fo, ch)
+            if quem != "equipe" and not legivel:
+                fora.append({"nome": l.get("nome"), "motivo": "sem conteúdo legível (mensagem que o sistema não exibe)"}); continue
         b, canal, prova = classifica(l, ovr)
         if reclique and not o_.get("bucket"):
             b, canal, prova = "trafego", None, "reclique (lead antigo que voltou pelo anúncio)"
-        if b == "nao" and not l.get("primeira_msg_lead") and l.get("external_id"):
-            prova = "chegou por fora (conversa começa com agendamento da equipe) — origem a descobrir"
+        if b == "nao" and not o_.get("bucket"):
+            if quem is None:
+                quem, legivel = _abertura(fo, ch)
+            if quem == "equipe":
+                cri = _pac_criado(fo)
+                lim_cad = (dt.date.fromisoformat(l.get("data_chegada_sp") or ch) - dt.timedelta(days=3)).isoformat()
+                if cri and cri < lim_cad:
+                    fora.append({"nome": l.get("nome"), "motivo": "cliente da base (cadastro desde %s/%s/%s; conversa aberta pela equipe)" % (cri[8:10], cri[5:7], cri[:4])}); continue
+                prova = "chegou por fora (conversa começa com agendamento da equipe) — origem a descobrir"
         if b is None:
             fora.append({"nome": l.get("nome"), "motivo": canal}); continue
         bk = [x for x in bks.get(fo, []) if x["quando"][:10] >= ch and x["criado"] <= lim]

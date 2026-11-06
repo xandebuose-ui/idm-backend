@@ -103,12 +103,31 @@ _COD = {"trafego_pago": ("trafego", None), "organico_bio": ("mkt", "Bio"), "orga
         "relacionamento_indicacao": ("rel", None)}
 _FORA = ("fornecedor_parceiro", "teste_interno", "equipe_interna", "spam")
 
+_CRM_ORIG = [(re.compile(r"indica|relacionamento|pr[eé]dio|feira|^dayane mafra$", re.I), ("rel", None)),
+             (re.compile(r"chat ?gpt|\bia\b", re.I), ("mkt", "IA (ChatGPT)")),
+             (re.compile(r"google", re.I), ("mkt", "Google")), (re.compile(r"\bsite\b", re.I), ("mkt", "Site")),
+             (re.compile(r"bio", re.I), ("mkt", "Bio")), (re.compile(r"instagram", re.I), ("mkt", "Direct/Instagram")),
+             (re.compile(r"tr[aá]fego|an[uú]ncio|facebook", re.I), ("trafego", None))]
+_CRM_BASE = re.compile(r"j[aá] [eé] cliente|base|cliente antig|renova|fidelidade", re.I)
+
+def _crm_origem(ops):
+    for o in sorted(ops, key=lambda o: str(o.get("criado_em_ce") or "")):
+        s = str(o.get("origem") or "").strip()
+        if not s or s in ("None", "Outro", "WhatsApp"): continue
+        if _CRM_BASE.search(s): return "base", s
+        for rx, bc in _CRM_ORIG:
+            if rx.search(s): return bc, s
+    return None, None
+
+def _limpa(v):
+    return str(v).split("<")[0].strip() if v else v
+
 def classifica(l, ovr):
     """-> (bucket, canal, prova) ou (None, motivo, None) quando nao e lead."""
     o = ovr.get(l.get("fone")) or {}
     if o.get("nao_lead"):
         return None, "marcado 'não é lead' pela gestão", None
-    ia = l.get("ia") or {}
+    ia = {k: _limpa(v) for k, v in (l.get("ia") or {}).items()}
     if o.get("bucket"):
         return o["bucket"], o.get("canal"), (o.get("prova") or "informada pela gestão") + " (correção manual)"
     if l.get("interno") or ia.get("tipo_contato") in _FORA:
@@ -175,16 +194,19 @@ def _abertura(fo, ch):
     """(quem abriu a conversa no dia/mes da chegada, lead mandou algo legivel?)"""
     def f():
         ref = _fw._get_db().collection("escuta_conversas").document(fo)
-        ms = []
+        ms, tx = [], []
         for x in ref.collection("msgs_" + ch[:7]).stream():
             m = x.to_dict() or {}
             if m.get("de") in ("lead", "equipe"):
                 ms.append((str(m.get("data")), m.get("de"), m.get("tipo")))
-        ms.sort()
+                if m.get("de") == "lead" and (m.get("texto") or "").strip():
+                    tx.append((str(m.get("data")), m.get("texto").strip()))
+        ms.sort(); tx.sort()
+        txts = [t for d_, t in tx if (_sp(d_) or dt.datetime(2000, 1, 1)).date().isoformat() >= ch] or [t for d_, t in tx]
         ms = [m for m in ms if (_sp(m[0]) or dt.datetime(2000, 1, 1)).date().isoformat() >= ch] or ms
         quem = ms[0][1] if ms else None
         legivel = any(m[1] == "lead" and m[2] not in ("unsupported",) for m in ms)
-        return quem, legivel
+        return quem, legivel, " | ".join(t for t in txts[:3])
     return _cache("ab:%s:%s" % (fo, ch), 600, f)
 
 # ------------------------------------------------------------------ montagem
@@ -193,6 +215,11 @@ def montar(de, ate, versao="gestao"):
     bks = _bookings(de, ate)
     lim = ate + "T23:59"
     L, fora = [], []
+    from concurrent.futures import ThreadPoolExecutor
+    cand = [(l.get("fone"), l.get("data_chegada_sp")) for l in leads if l.get("fone") and de <= (l.get("data_chegada_sp") or "") <= ate
+            and not (ovr.get(l.get("fone")) or {}).get("bucket") and (not l.get("primeira_msg_lead") or (l.get("origem_codigo") or "nao_informada") == "nao_informada")]
+    with ThreadPoolExecutor(16) as ex:
+        list(ex.map(lambda a: _abertura(*a), cand))
     for l in leads:
         ch = l.get("data_chegada_sp")
         fo = l.get("fone")
@@ -214,17 +241,31 @@ def montar(de, ate, versao="gestao"):
         o_ = ovr.get(fo) or {}
         if (ganhou_antes or (_cruz._eh_comprador(fo) and not opp_lead)) and not o_.get("bucket"):
             fora.append({"nome": l.get("nome"), "motivo": "cliente da base"}); continue
-        quem, legivel = (None, True)
-        if not o_.get("bucket") and not reclique and not l.get("primeira_msg_lead"):
-            quem, legivel = _abertura(fo, ch)
-            if quem != "equipe" and not legivel:
+        quem, legivel, txt = None, True, ""
+        sem_cod = (l.get("origem_codigo") or "nao_informada") == "nao_informada"
+        if not o_.get("bucket") and not reclique and (not l.get("primeira_msg_lead") or sem_cod):
+            quem, legivel, txt = _abertura(fo, ch)
+            if not l.get("primeira_msg_lead") and quem != "equipe" and not legivel:
                 fora.append({"nome": l.get("nome"), "motivo": "sem conteúdo legível (mensagem que o sistema não exibe)"}); continue
         b, canal, prova = classifica(l, ovr)
+        if b == "nao" and txt and not o_.get("bucket"):
+            if _REAT.search(txt):
+                b, canal, prova = "reativacao", None, "anúncio de reativação (mensagem do lead)"
+            else:
+                code = _cruz._classifica_origem(txt, {})
+                if code in _COD:
+                    b, canal = _COD[code]; prova = "mensagem do lead: \"%s\"" % txt[:80]
         if reclique and not o_.get("bucket"):
             b, canal, prova = "trafego", None, "reclique (lead antigo que voltou pelo anúncio)"
         if b == "nao" and not o_.get("bucket"):
+            cb, s = _crm_origem(ops)
+            if cb == "base" and quem == "equipe":
+                fora.append({"nome": l.get("nome"), "motivo": "cliente da base (CRM: %s; conversa aberta pela equipe)" % s}); continue
+            if cb and cb != "base":
+                b, canal = cb; prova = "origem registrada no CRM (%s)" % s
+        if b == "nao" and not o_.get("bucket"):
             if quem is None:
-                quem, legivel = _abertura(fo, ch)
+                quem, legivel, txt = _abertura(fo, ch)
             if quem == "equipe":
                 cri = _pac_criado(fo)
                 lim_cad = (dt.date.fromisoformat(l.get("data_chegada_sp") or ch) - dt.timedelta(days=3)).isoformat()

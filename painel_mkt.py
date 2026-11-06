@@ -53,6 +53,11 @@ def _vendas_db():
         v = d.to_dict() or {}
         if v.get("fone"):
             out.setdefault(v["fone"], []).append(v)
+    # orcamento ganho (id numerico) + venda (uuid) = o mesmo dinheiro -> fica so a venda
+    for fo, vs in out.items():
+        vendas_uuid = {(v.get("data"), v.get("valor_centavos")) for v in vs if v.get("status") == "won" and "-" in str(v.get("id") or "")}
+        out[fo] = [v for v in vs if not (v.get("status") == "won" and "-" not in str(v.get("id") or "")
+                                         and (v.get("data"), v.get("valor_centavos")) in vendas_uuid)]
     return out
 
 def _ovr_db():
@@ -228,9 +233,14 @@ def montar(de, ate, versao="gestao"):
             rc = _reclique(fo, de, ate)
             if rc:
                 ch, reclique = rc, True
+        ops = crm.get(fo) or []
+        if ch and not reclique:
+            # escuta comecou em out/26 com carga retroativa: a 1a oportunidade de LEADS/REATIV no CRM corrige a chegada
+            ini = [str(o.get("criado_em_ce") or "")[:10] for o in ops if (o.get("pipeline") or "").upper().startswith(("LEADS", "REATIV")) and o.get("criado_em_ce")]
+            if ini and min(ini) < ch:
+                ch = min(ini)
         if not ch or not (de <= ch <= ate):
             continue
-        ops = crm.get(fo) or []
         vs = vendas.get(fo) or []
         ia = l.get("ia") or {}
         # cliente antigo (comprou antes de chegar) = base, fora da contagem de leads

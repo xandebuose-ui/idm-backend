@@ -218,3 +218,21 @@ def montar(de, ate, versao="gestao"):
     return {"ok": True, "de": de, "ate": ate, "versao": versao, "gerado": (dt.datetime.utcnow() - dt.timedelta(hours=3)).isoformat()[:16],
             "leads": L, "fora": fora[:200], "antigos": antigos, "meta": meta, "contrato": CONTRATO,
             "buckets": BUCKETS, "canais": CANAIS, "wa_cap": list(WA_CAP)}
+
+
+def debug(fo, de, ate):
+    db = _fw._get_db()
+    d = db.collection(COLL_LEADS).document(fo).get()
+    l = d.to_dict() if d.exists else {}
+    ref = db.collection("escuta_conversas").document(fo)
+    msgs = []
+    for mes in sorted({de[:7], ate[:7]}):
+        for x in ref.collection("msgs_" + mes).stream():
+            m = x.to_dict() or {}
+            msgs.append([str(m.get("data"))[:19], m.get("de"), m.get("tipo"), (m.get("texto") or "")[:60]])
+    msgs.sort()
+    keep = {k: l.get(k) for k in ("fone", "nome", "external_id", "primeira_chegada", "data_chegada_sp", "ultima_msg_em", "origem_codigo",
+                                   "primeira_msg_lead", "msgs_lead", "identidade", "interno")}
+    keep["ia_tipo"] = (l.get("ia") or {}).get("tipo_contato"); keep["ia_origem"] = (l.get("ia") or {}).get("origem_declarada")
+    return {"lead": keep, "comprador": _cruz._eh_comprador(fo), "msgs": msgs[:12], "n_msgs": len(msgs),
+            "reclique": _reclique(fo, de, ate)}

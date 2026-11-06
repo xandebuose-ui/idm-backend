@@ -1980,11 +1980,13 @@ def ficha_pacientes(q: str = "",
 
 # ======================= PAINEL VIVO DO MARKETING (06/11/2026) =======================
 @app.get("/api/marketing/vivo")
-def api_mkt_vivo(de: str, ate: str, authorization: str = Header(default="")):
+def api_mkt_vivo(de: str, ate: str, debug: str = "", authorization: str = Header(default="")):
     _uid, _p = _usuario_mkt(authorization)
     if not (re.match(r"^\d{4}-\d{2}-\d{2}$", de) and re.match(r"^\d{4}-\d{2}-\d{2}$", ate)) or de > ate:
         raise HTTPException(status_code=400, detail="de/ate AAAA-MM-DD")
     import painel_mkt as _pm
+    if debug and _eh_gestao(_p):
+        return _pm.debug(debug, de, ate)
     r = _pm.montar(de, ate)
     g = _eh_gestao(_p)
     r["eu"] = {"gestao": g, "role": _p.get("role"), "master": _p.get("master") is True}

@@ -271,7 +271,10 @@ def montar(de, ate, versao="gestao"):
         if b == "nao" and not o_.get("bucket"):
             cb, s = _crm_origem(ops)
             if cb == "base" and quem == "equipe":
-                fora.append({"fone": fo, "nome": l.get("nome"), "motivo": "cliente da base (CRM: %s; conversa aberta pela equipe)" % s}); continue
+                cri = _pac_criado(fo)
+                lim_cad = (dt.date.fromisoformat(l.get("data_chegada_sp") or ch) - dt.timedelta(days=3)).isoformat()
+                if cri and cri < lim_cad:   # CRM diz base E o cadastro e antigo; cadastro novo = chegou por fora
+                    fora.append({"fone": fo, "nome": l.get("nome"), "motivo": "cliente da base (CRM: %s; cadastro desde %s/%s/%s)" % (s, cri[8:10], cri[5:7], cri[:4])}); continue
             if cb and cb != "base":
                 b, canal = cb; prova = "registrada no CRM: %s (manual — pode ter erro da equipe)" % s; via_crm = True
         if b == "nao" and not o_.get("bucket"):

@@ -3,7 +3,7 @@ na hora a partir do banco (escuta_leads, escuta_crm, escuta_vendas), agenda (API
 So leitura. Correcoes manuais de origem/exclusao vivem em mkt_origem_override (so gestao grava).
 Regra A (02/11): venda do periodo de lead de qualquer safra conta; 'Vendas a clientes novos (LEADS)'.
 """
-import re, time, json, datetime as dt
+import re, time, json, urllib.parse, datetime as dt
 import firebase_writer as _fw
 import motor_cruzamento as _cruz
 import motor_fila as mf
@@ -236,9 +236,12 @@ def debug(fo, de, ate):
     keep["ia_tipo"] = (l.get("ia") or {}).get("tipo_contato"); keep["ia_origem"] = (l.get("ia") or {}).get("origem_declarada")
     pac = {}
     try:
-        f = fo if len(fo) == 11 else fo  # mesmo formato usado no cruzamento
-        d0 = mf.api("patients?phone=" + f)
-        arr = (d0.get("data") or []) if isinstance(d0, dict) else []
+        arr = []
+        for f in (fo, fo[:2] + "9" + fo[2:], "55" + fo[:2] + "9" + fo[2:], "+55" + fo[:2] + "9" + fo[2:]):
+            d0 = mf.api("patients?phone=" + urllib.parse.quote(f))
+            arr = (d0.get("data") or []) if isinstance(d0, dict) else []
+            if arr:
+                pac_fmt = f; break
         if arr:
             pac = {k: (v if not isinstance(v, (dict, list)) else "...") for k, v in arr[0].items() if k not in ("name", "phone", "email", "cpf", "document", "annotation", "address")}
     except Exception as e:

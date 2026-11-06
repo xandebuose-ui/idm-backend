@@ -126,6 +126,30 @@ def classifica(l, ovr):
         return b, c, "declarada na conversa (%s)" % d
     return "nao", None, "não informada"
 
+def _reclique(fo, de, ate):
+    """Lead antigo que mandou de novo a frase do anuncio dentro do periodo -> (data, True)."""
+    def f():
+        ref = _fw._get_db().collection("escuta_conversas").document(fo)
+        meses = sorted({de[:7], ate[:7]})
+        for mes in meses:
+            for d in ref.collection("msgs_" + mes).stream():
+                m = d.to_dict() or {}
+                if m.get("de") != "lead":
+                    continue
+                q = _sp(m.get("data"))
+                if not q: continue
+                dia = q.date().isoformat()
+                if de <= dia <= ate and _RECLIQUE.search(m.get("texto") or ""):
+                    return dia
+        return None
+    return _cache("rc:%s:%s:%s" % (fo, de, ate), 600, f)
+
+def _data_ganho(v):
+    if v.get("status") == "won" and v.get("atualizado_em_ce"):
+        x = _sp(v["atualizado_em_ce"])
+        if x: return x.date().isoformat()
+    return v.get("data") or ""
+
 # ------------------------------------------------------------------ montagem
 def montar(de, ate, versao="gestao"):
     leads, crm, vendas, ovr = _leads_db(), _crm_db(), _vendas_db(), _ovr_db()
@@ -134,25 +158,38 @@ def montar(de, ate, versao="gestao"):
     L, fora = [], []
     for l in leads:
         ch = l.get("data_chegada_sp")
+        fo = l.get("fone")
+        reclique = False
+        if ch and ch < de and (l.get("origem_codigo") == "trafego_pago") and (_sp(l.get("ultima_msg_em")) or dt.datetime(2000, 1, 1)).date().isoformat() >= de \
+                and not any((v.get("status") == "won") for v in (vendas.get(fo) or [])):
+            rc = _reclique(fo, de, ate)
+            if rc:
+                ch, reclique = rc, True
         if not ch or not (de <= ch <= ate):
             continue
-        fo = l.get("fone")
         ops = crm.get(fo) or []
         vs = vendas.get(fo) or []
         ia = l.get("ia") or {}
         # cliente antigo (comprou antes de chegar) = base, fora da contagem de leads
-        ganhou_antes = any(v.get("status") == "won" and (v.get("data") or "9") < ch for v in vs)
+        ganhou_antes = any(v.get("status") == "won" and _data_ganho(v) < (l.get("data_chegada_sp") or ch) for v in vs)
         opp_lead = [o for o in ops if (o.get("pipeline") or "").upper().startswith(("LEADS", "REATIV"))]
-        if (ganhou_antes or (ia.get("tipo_contato") == "cliente" and not opp_lead)) and not (ovr.get(fo) or {}).get("bucket"):
+        o_ = ovr.get(fo) or {}
+        if (ganhou_antes or (_cruz._eh_comprador(fo) and not opp_lead)) and not o_.get("bucket"):
             fora.append({"nome": l.get("nome"), "motivo": "cliente da base"}); continue
+        if not l.get("primeira_msg_lead") and not l.get("external_id") and not o_.get("bucket"):
+            fora.append({"nome": l.get("nome"), "motivo": "sem conteúdo legível (mensagem que o sistema não exibe)"}); continue
         b, canal, prova = classifica(l, ovr)
+        if reclique and not o_.get("bucket"):
+            b, canal, prova = "trafego", None, "reclique (lead antigo que voltou pelo anúncio)"
+        if b == "nao" and not l.get("primeira_msg_lead") and l.get("external_id"):
+            prova = "chegou por fora (conversa começa com agendamento da equipe) — origem a descobrir"
         if b is None:
             fora.append({"nome": l.get("nome"), "motivo": canal}); continue
         bk = [x for x in bks.get(fo, []) if x["quando"][:10] >= ch and x["criado"] <= lim]
         bk_fe = [x for x in bk if x["quando"][:16] <= lim and x["status"].lower() == "done"]
         on = any("on-line" in x["proc"].lower() for x in bk_fe); pr = any("on-line" not in x["proc"].lower() for x in bk_fe)
         q = [v for v in vs if (v.get("data") or "") >= ch and (v.get("data") or "") <= ate]
-        won = [v for v in q if v.get("status") == "won"]; opn = [v for v in q if v.get("status") in ("open", "due")]
+        won = [v for v in vs if v.get("status") == "won" and ch <= _data_ganho(v) <= ate and (v.get("data") or "") >= (l.get("data_chegada_sp") or ch)]; opn = [v for v in q if v.get("status") in ("open", "due")]
         porta = None
         if bk:
             porta = "on" if "on-line" in sorted(bk, key=lambda x: x["quando"])[0]["proc"].lower() else "pr"
@@ -171,9 +208,9 @@ def montar(de, ate, versao="gestao"):
     antigos = []
     for fo, vs in vendas.items():
         if fo in fones_L: continue
-        w = [v for v in vs if v.get("status") == "won" and de <= (v.get("data") or "") <= ate]
+        w = [v for v in vs if v.get("status") == "won" and de <= _data_ganho(v) <= ate]
         if not w: continue
-        if any(v.get("status") == "won" and (v.get("data") or "9") < de for v in vs): continue
+        if any(v.get("status") == "won" and _data_ganho(v) < de for v in vs): continue
         ops = crm.get(fo) or []
         if not any((o.get("pipeline") or "").upper().startswith(("LEADS", "REATIV")) for o in ops): continue
         antigos.append({"nome": w[0].get("comprador"), "valor": sum(int(v.get("valor_centavos") or 0) for v in w) / 100.0})

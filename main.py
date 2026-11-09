@@ -2001,6 +2001,30 @@ def api_mkt_vivo(de: str, ate: str, debug: str = "", authorization: str = Header
             x["fone_id"] = x.get("fone")
     return r
 
+@app.post("/api/admin/conta-marketing")
+async def api_admin_conta_mkt(request: Request, authorization: str = Header(default="")):
+    """Master cria (ou reaproveita) conta com role marketing e devolve link para a pessoa definir a senha."""
+    _uid, _p = _usuario_mkt(authorization)
+    if not (_eh_gestao(_p) and _p.get("master") is True):
+        raise HTTPException(status_code=403, detail="so master")
+    b = await request.json()
+    email = str(b.get("email") or "").strip().lower(); nome = str(b.get("nome") or "").strip()[:60]
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[a-z]{2,}$", email) or not nome:
+        raise HTTPException(status_code=400, detail="email/nome")
+    import firebase_writer as _fwm
+    db = _fwm._get_db()
+    from firebase_admin import auth as _fa
+    try:
+        u = _fa.get_user_by_email(email); novo = False
+    except _fa.UserNotFoundError:
+        u = _fa.create_user(email=email, display_name=nome); novo = True
+    ref = db.collection("users").document(u.uid)
+    s = ref.get()
+    if s.exists and (s.to_dict() or {}).get("role") not in (None, "", "marketing"):
+        raise HTTPException(status_code=409, detail="conta ja existe com outro perfil")
+    ref.set({"email": email, "name": nome, "role": "marketing"}, merge=True)
+    return {"ok": True, "uid": u.uid, "novo": novo, "link_senha": _fa.generate_password_reset_link(email)}
+
 @app.post("/api/marketing/recarga")
 def api_mkt_recarga(dias: int = 40, authorization: str = Header(default="")):
     """Recarga retroativa das conversas (gestao master). Idempotente por id de mensagem."""

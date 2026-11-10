@@ -425,6 +425,10 @@ def pronto(de, ate, forcar=False):
             threading.Thread(target=_recalc, args=(de, ate), daemon=True).start()
         return c[1]
     _recalc(de, ate)
+    for _ in range(120):          # outro pedido/laco ja esta calculando o mesmo periodo: espera ele
+        if k not in _PRE_ANDANDO:
+            break
+        time.sleep(0.5)
     c = _PRE.get(k)
     return c[1] if c else montar(de, ate)
 

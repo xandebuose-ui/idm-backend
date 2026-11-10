@@ -3,7 +3,7 @@ na hora a partir do banco (escuta_leads, escuta_crm, escuta_vendas), agenda (API
 So leitura. Correcoes manuais de origem/exclusao vivem em mkt_origem_override (so gestao grava).
 Regra A (02/11): venda do periodo de lead de qualquer safra conta; 'Vendas a clientes novos (LEADS)'.
 """
-import re, time, json, urllib.parse, datetime as dt
+import re, time, json, urllib.parse, threading, datetime as dt
 import firebase_writer as _fw
 import motor_cruzamento as _cruz
 import motor_fila as mf
@@ -383,3 +383,63 @@ def debug(fo, de, ate):
             for v in (_vendas_db().get(fo) or [])]
     return {"lead": keep, "paciente": pac, "vendas": vend, "comprador": _cruz._eh_comprador(fo), "msgs": msgs[:12], "n_msgs": len(msgs),
             "reclique": _reclique(fo, de, ate)}
+
+
+# ------------------------------------------------------------------ pre-calculo (09/11: abrir rapido)
+_PRE = {}            # (de, ate) -> (ts, resultado)
+_PRE_TTL = 330       # o laco recalcula a cada 5 min
+_PRE_ANDANDO = set()
+_PRE_LOCK = threading.Lock()
+
+def presets(hoje=None):
+    """Mesmos atalhos da tela (datas de SP)."""
+    h = hoje or (dt.datetime.utcnow() - dt.timedelta(hours=3)).date()
+    dom = h - dt.timedelta(days=(h.weekday() + 1) % 7)
+    ini_mes = h.replace(day=1)
+    fim_ant = ini_mes - dt.timedelta(days=1)
+    f = lambda a, b: (a.isoformat(), b.isoformat())
+    return {"hoje": f(h, h), "sem": f(dom, h), "mes": f(ini_mes, h), "u7": f(h - dt.timedelta(days=6), h),
+            "u30": f(h - dt.timedelta(days=29), h), "mesant": f(fim_ant.replace(day=1), fim_ant)}
+
+def _recalc(de, ate):
+    k = (de, ate)
+    with _PRE_LOCK:
+        if k in _PRE_ANDANDO:
+            return
+        _PRE_ANDANDO.add(k)
+    try:
+        r = montar(de, ate)
+        _PRE[k] = (time.time(), r)
+        if len(_PRE) > 40:   # guarda so os mais recentes
+            for kk, _ in sorted(_PRE.items(), key=lambda x: x[1][0])[:len(_PRE) - 40]:
+                _PRE.pop(kk, None)
+    finally:
+        _PRE_ANDANDO.discard(k)
+
+def pronto(de, ate, forcar=False):
+    """Devolve o calculo pronto. Velho -> devolve e recalcula por tras. Inexistente/forcado -> calcula agora."""
+    k = (de, ate)
+    c = _PRE.get(k)
+    if c and not forcar:
+        if time.time() - c[0] > _PRE_TTL:
+            threading.Thread(target=_recalc, args=(de, ate), daemon=True).start()
+        return c[1]
+    _recalc(de, ate)
+    c = _PRE.get(k)
+    return c[1] if c else montar(de, ate)
+
+_LACO = {"on": False}
+def iniciar_laco():
+    if _LACO["on"]:
+        return
+    _LACO["on"] = True
+    def laco():
+        time.sleep(20)
+        while True:
+            for de, ate in dict.fromkeys(presets().values()):
+                try:
+                    _recalc(de, ate)
+                except Exception as e:
+                    print("[painel_mkt] pre-calculo erro %s-%s: %r" % (de, ate, e), flush=True)
+            time.sleep(300)
+    threading.Thread(target=laco, daemon=True).start()

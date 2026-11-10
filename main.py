@@ -52,6 +52,14 @@ def _vigia_cracha():
         print("[cracha] vigia erro:", e)
 
 @app.on_event("startup")
+def _painel_mkt_laco():
+    try:
+        import painel_mkt as _pm
+        _pm.iniciar_laco()
+    except Exception as e:
+        print("[painel_mkt] laco nao iniciou: %r" % e, flush=True)
+
+@app.on_event("startup")
 def _carregar_termometro_do_firestore():
     try:
         import firebase_writer as _fw
@@ -1980,14 +1988,16 @@ def ficha_pacientes(q: str = "",
 
 # ======================= PAINEL VIVO DO MARKETING (06/11/2026) =======================
 @app.get("/api/marketing/vivo")
-def api_mkt_vivo(de: str, ate: str, debug: str = "", authorization: str = Header(default="")):
+def api_mkt_vivo(de: str, ate: str, debug: str = "", atualizar: int = 0, authorization: str = Header(default="")):
     _uid, _p = _usuario_mkt(authorization)
     if not (re.match(r"^\d{4}-\d{2}-\d{2}$", de) and re.match(r"^\d{4}-\d{2}-\d{2}$", ate)) or de > ate:
         raise HTTPException(status_code=400, detail="de/ate AAAA-MM-DD")
     import painel_mkt as _pm
     if debug and _eh_gestao(_p):
         return _pm.debug(debug, de, ate)
-    r = _pm.montar(de, ate)
+    import copy as _copy
+    _pm.iniciar_laco()
+    r = _copy.deepcopy(_pm.pronto(de, ate, forcar=bool(atualizar) and _p.get("master") is True))
     g = _eh_gestao(_p)
     r["eu"] = {"gestao": g, "role": _p.get("role"), "master": _p.get("master") is True}
     if not g:   # versao do marketing: sem telefone e sem os erros internos do comercial

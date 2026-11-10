@@ -21,11 +21,20 @@ th{background:#f1ece2;font-size:11px}td.n,th.n{text-align:right;white-space:nowr
 .notas form{display:grid;gap:5px;background:var(--card);border:1px solid var(--line);padding:8px;border-radius:6px}.notas input,.notas select,.notas textarea{font:inherit;padding:5px;border:1px solid var(--line);border-radius:4px}
 button.sm{font-size:11px;padding:2px 7px;border:1px solid var(--line);background:#fff;border-radius:4px;cursor:pointer}.msg{padding:24px}
 iframe{border:0;width:100%;height:calc(100vh - 50px);background:#fff;display:block}.mut{color:var(--mut)}
+.perbt{background:#c9b48a!important;color:#062621!important;font-weight:600;font-size:13px!important;padding:6px 12px!important}.perbt b{font-weight:800}
+.perpop{position:fixed;top:46px;left:12px;z-index:20;display:flex;flex-wrap:wrap;gap:0;background:#fff;color:var(--ink);border:1px solid var(--line);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.18);width:min(600px,calc(100vw - 24px));overflow:hidden}
+.perpop .pl{flex:1 1 190px;padding:12px 14px;border-right:1px solid var(--line)}.perpop .pc2{flex:1 1 290px;padding:12px 14px}.perpop .pt{font-weight:700;margin-bottom:6px}
+.perpop label{display:flex;align-items:center;gap:8px;padding:6px 4px;border-radius:6px;cursor:pointer;font-size:13.5px}.perpop label:hover{background:#f4efe4}.perpop input[type=radio]{accent-color:#062621;width:16px;height:16px}
+.perpop .ph{font-size:11px;color:var(--mut);margin-top:8px}.cnav{display:flex;align-items:center;gap:4px;margin-bottom:6px}.cnav b{flex:1;text-align:center}
+.cnav button{border:0;background:transparent;font-size:15px;cursor:pointer;padding:2px 8px;color:var(--mut)}.calg{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;text-align:center}
+.calg .dw{font-weight:700;font-size:11.5px;padding:4px 0}.calg .d{padding:7px 0;border-radius:7px;cursor:pointer;font-size:13px}.calg .d:hover{background:#f4efe4}.calg .fora{color:#bbb}
+.calg .ent{background:#efe6d2}.calg .sel,.calg .sel:hover{background:#062621;color:#fff;font-weight:700}.calg .hj{outline:1px solid #c9b48a}
+@media(max-width:600px){.perpop .pl{border-right:0;border-bottom:1px solid var(--line)}}
 </style></head><body>
 <div class=top><b>📈 Marketing</b><button id=tb-vivo class=on onclick="aba('vivo')">Ao vivo</button><button id=tb-fech onclick="aba('fech')">Fechamentos</button>
-<span id=perbox><select id=per onchange="perChange()"><option value=mes>Mês atual</option><option value=sem>Semana atual (dom–sáb)</option><option value=mesant>Mês anterior</option><option value=custom>Período…</option></select>
-<input type=date id=de style="display:none"><input type=date id=ate style="display:none"><button onclick="carrega()">Atualizar</button></span>
+<span id=perbox><button id=perbt class=perbt onclick="perAbre(event)">📅 Período: <b id=perlbl>Este mês</b> ▾</button><button id=recalc style="display:none" onclick="carrega(true)" title="Recalcular agora (só master)">↻ recalcular</button></span>
 <span id=fechbt style="display:none"></span><span class=s id=st>carregando…</span></div>
+<div id=perpop class=perpop style="display:none" onclick="event.stopPropagation()"><div class=pl><div class=pt>Período</div><div id=perlist></div><div class=ph>O filtro vale pela <b>data de chegada do lead</b>; vendas entram pela data da venda e o Meta pelo dia do gasto.</div></div><div class=pc2><div class=cnav><button onclick="calNav(-12)">«</button><button onclick="calNav(-1)">‹</button><b id=calm></b><button onclick="calNav(1)">›</button><button onclick="calNav(12)">»</button></div><div id=calg class=calg></div><div class=ph id=calh>Clique no dia inicial e depois no final.</div></div></div>
 <div id=vivo class=wrap><div class=msg>Carregando…</div></div><div id=fech style="display:none"></div>
 <script>
 const APPMODE=!!window.IDM_APP;let _tok=null,_tokT=0,_esp=[];
@@ -36,12 +45,28 @@ let t=await pedeToken(false);let r=await fetch(p,o(t));if(r.status===401){t=awai
 const $=id=>document.getElementById(id);const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const brl=v=>'R$ '+(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});const pc=(a,b)=>b?Math.round(a/b*100)+'%':'—';
 const hojeSP=()=>new Date(Date.now()-3*3600e3).toISOString().slice(0,10);
-function periodo(){const v=$('per').value,h=hojeSP(),d=new Date(h+'T12:00:00Z');
- if(v==='mes')return[h.slice(0,8)+'01',h];
- if(v==='sem'){const x=new Date(d);x.setUTCDate(d.getUTCDate()-d.getUTCDay());return[x.toISOString().slice(0,10),h];}
- if(v==='mesant'){const x=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),0));return[x.toISOString().slice(0,8)+'01',x.toISOString().slice(0,10)];}
- return[$('de').value||h.slice(0,8)+'01',$('ate').value||h];}
-function perChange(){const c=$('per').value==='custom';$('de').style.display=$('ate').style.display=c?'':'none';if(!c)carrega();}
+const PRES=[['hoje','Hoje'],['sem','Esta semana'],['mes','Este mês'],['u7','Últimos 7 dias'],['u30','Últimos 30 dias'],['mesant','Mês anterior']];
+let PER={k:'mes'};try{const s=JSON.parse(localStorage.getItem('mkt_per')||'null');if(s&&s.k)PER=s;}catch(e){}
+const iso=d=>d.toISOString().slice(0,10);const dd=s=>new Date(s+'T12:00:00Z');const br=s=>s.slice(8)+'/'+s.slice(5,7)+'/'+s.slice(0,4);
+function rangeDe(k){const h=hojeSP(),d=dd(h);const add=n=>{const x=new Date(d);x.setUTCDate(d.getUTCDate()+n);return iso(x)};
+ if(k==='hoje')return[h,h];if(k==='sem')return[add(-d.getUTCDay()),h];if(k==='mes')return[h.slice(0,8)+'01',h];if(k==='u7')return[add(-6),h];if(k==='u30')return[add(-29),h];
+ if(k==='mesant'){const x=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),0));return[iso(x).slice(0,8)+'01',iso(x)];}return null;}
+function periodo(){if(PER.k==='custom'&&PER.de&&PER.ate)return[PER.de,PER.ate];return rangeDe(PER.k)||rangeDe('mes');}
+function perLabel(){const p=PRES.find(x=>x[0]===PER.k);if(p)return p[1];const [a,b]=periodo();return a===b?br(a):br(a)+' a '+br(b);}
+let calM=null,selDe=null,selAte=null;
+function perAbre(ev){ev.stopPropagation();const pp=$('perpop');if(pp.style.display!=='none'){pp.style.display='none';return;}
+ const [a,b]=periodo();selDe=a;selAte=b;calM=dd(b.slice(0,8)+'01');
+ $('perlist').innerHTML=PRES.map(([k,n])=>`<label><input type=radio name=perr ${PER.k===k?'checked':''} onchange="perSet('${k}')"> ${n}</label>`).join('');
+ const r=$('perbt').getBoundingClientRect();pp.style.top=(r.bottom+6)+'px';pp.style.left=Math.max(12,Math.min(r.left,window.innerWidth-pp.offsetWidth-12))+'px';pp.style.display='flex';calDesenha();}
+document.addEventListener('click',()=>{const pp=$('perpop');if(pp)pp.style.display='none';});
+function perSet(k,de,ate){PER=k==='custom'?{k,de,ate}:{k};try{localStorage.setItem('mkt_per',JSON.stringify(PER))}catch(e){}$('perlbl').textContent=perLabel();$('perpop').style.display='none';carrega();}
+function calNav(n){calM=new Date(Date.UTC(calM.getUTCFullYear(),calM.getUTCMonth()+n,1,12));calDesenha();}
+function calDesenha(){const y=calM.getUTCFullYear(),m=calM.getUTCMonth();{const t=calM.toLocaleDateString('pt-BR',{month:'long',year:'numeric',timeZone:'UTC'});$('calm').textContent=t[0].toUpperCase()+t.slice(1);}
+ const ini=new Date(Date.UTC(y,m,1,12));ini.setUTCDate(1-ini.getUTCDay());const h=hojeSP();let s='DSTQQSS'.split('').map(c=>`<div class=dw>${c}</div>`).join('');
+ for(let i=0;i<42;i++){const x=new Date(ini);x.setUTCDate(ini.getUTCDate()+i);const k=iso(x);let c='d';if(x.getUTCMonth()!==m)c+=' fora';
+  if(selDe&&selAte&&k>selDe&&k<selAte)c+=' ent';if(k===selDe||k===selAte)c+=' sel';if(k===h)c+=' hj';s+=`<div class='${c}' onclick="calClica('${k}')">${x.getUTCDate()}</div>`;}
+ $('calg').innerHTML=s;$('calh').textContent=selDe&&!selAte?'Agora clique no dia final.':'Clique no dia inicial e depois no final.';}
+function calClica(k){if(!selDe||selAte){selDe=k;selAte=null;calDesenha();return;}let a=selDe,b=k;if(b<a)[a,b]=[b,a];selDe=a;selAte=b;calDesenha();setTimeout(()=>perSet('custom',a,b),150);}
 const COR={trafego:'#1d4f6e',reativacao:'#7a4fa0',mkt:'#b7892f',rel:'#1e7d4f',nao:'#a2341f'};
 function calc(s){const r={leads:s.length,opp:0,ag:0,at:0,on:0,pr:0,orc:0,orcv:0,won:0,wonv:0,opnv:0,ag_on:0,ag_pr:0,at_on:0,at_pr:0};
  s.forEach(x=>{r.opp+=x.opp?1:0;r.ag+=x.ag?1:0;r.at+=x.at?1:0;r.on+=x.on?1:0;r.pr+=x.pr?1:0;if(x.at&&x.orc){r.orc++;r.orcv+=x.orcv;}r.won+=x.won;r.wonv+=x.wonv;r.opnv+=x.opnv;
@@ -49,8 +74,8 @@ function calc(s){const r={leads:s.length,opp:0,ag:0,at:0,on:0,pr:0,orc:0,orcv:0,
 function semanas(de,ate){const out=[];let d=new Date(de+'T12:00:00Z');let i=1;while(d.toISOString().slice(0,10)<=ate){const ini=d.toISOString().slice(0,10);const f=new Date(d);f.setUTCDate(d.getUTCDate()+(6-d.getUTCDay()));let fim=f.toISOString().slice(0,10);if(fim>ate)fim=ate;
  out.push({s:'S'+i,ini,fim,rot:ini.slice(8)+'/'+ini.slice(5,7)+'–'+fim.slice(8)+'/'+fim.slice(5,7)});i++;d=new Date(fim+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+1);}return out;}
 let D=null,NOTAS=[];
-async function carrega(){const [de,ate]=periodo();$('st').textContent='calculando '+de.split('-').reverse().join('/')+' a '+ate.split('-').reverse().join('/')+'…';
- try{D=await api('/api/marketing/vivo?de='+de+'&ate='+ate);try{NOTAS=(await api('/api/marketing/notas?de='+de+'&ate='+ate)).notas}catch(e){NOTAS=[]}render();$('st').textContent='atualizado '+D.gerado.replace('T',' ');}
+async function carrega(forcar){const [de,ate]=periodo();$('perlbl').textContent=perLabel();$('st').textContent='calculando '+de.split('-').reverse().join('/')+' a '+ate.split('-').reverse().join('/')+'…';
+ try{D=await api('/api/marketing/vivo?de='+de+'&ate='+ate+(forcar?'&atualizar=1':''));$('recalc').style.display=D.eu&&D.eu.master?'':'none';try{NOTAS=(await api('/api/marketing/notas?de='+de+'&ate='+ate)).notas}catch(e){NOTAS=[]}render();$('st').textContent='atualizado '+D.gerado.replace('T',' ');}
  catch(e){$('vivo').innerHTML='<div class=msg>Sem acesso ou erro ('+esc(e.message)+'). Entre pelo app IDM.</div>';$('st').textContent='';}}
 function render(){const L=D.leads,G=D.eu.gestao,B={};D.buckets.forEach(([k])=>B[k]=L.filter(x=>x.bucket===k));const M={};for(const k in B)M[k]=calc(B[k]);const T=calc(L);
  const md=(D.meta&&D.meta.dias)||[];const gasto=c=>md.filter(r=>c(r.campanha)).reduce((a,r)=>a+r.gasto,0);const isCap=n=>D.wa_cap.some(c=>(n||'').includes(c.replace('CAM 0','CAM 0'))||new RegExp('CAM\\s*0?'+c.slice(-1)+'\\b').test(n||''));

@@ -11,7 +11,7 @@ import motor_fila as mf
 COLL_LEADS, COLL_CRM, COLL_VENDAS, COLL_OVR = "escuta_leads", "escuta_crm", "escuta_vendas", "mkt_origem_override"
 WA_CAP = ("CAM 04", "CAM 06", "CAM 07", "CAM 08")   # captacao por WhatsApp; CAM 09 = reativacao
 CONTRATO = 4000.0
-BUCKETS = [("trafego", "Tráfego pago — captação"), ("reativacao", "Tráfego — Reativação"), ("mkt", "Orgânico"),
+BUCKETS = [("trafego", "Tráfego — Captação"), ("reativacao", "Tráfego — Remarketing (reativação de base)"), ("mkt", "Orgânico"),
            ("rel", "Indicação e relacionamento"), ("nao", "Origem não informada")]
 CANAIS = ["Bio", "Direct/Instagram", "Site", "Google", "IA (ChatGPT)"]
 _CACHE = {}

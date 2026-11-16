@@ -40,215 +40,368 @@ def _brl(cent):
 def _brl_reais(v):
     return "R$ " + ("{:,.2f}".format(v or 0)).replace(",", "X").replace(".", ",").replace("X", ".")
 
+# ============================================================================ v2 (15/11/2026)
+# Regra unica: chegadas e origem vem do MESMO calculo do painel de Marketing (painel_mkt.montar).
+# Formato aprovado pelo Xandao: uma informacao por linha, total na frente, nada separado por virgula.
+_BKT = {"trafego": "Tráfego pago · Captação", "reativacao": "Tráfego pago · Remarketing", "mkt": "Orgânico",
+        "rel": "Indicação", "nao": "Sem origem"}
+_ORDEM_PIPE = ("LEADS", "CLIENTES ATIVOS", "REATIVA", "BLACK FRIDAY")
+_FECHADO = ("ganho", "perdido", "desqualificado")
+FOTO_COLL = os.environ.get("DIARIO_FOTO_COLL", "escuta_funil_foto")
+
+def _pct(a, b):
+    return "%d%%" % round(100.0 * a / b) if b else "0%"
+
+def _canal_txt(c):
+    c = c or "outro canal"
+    return "I.A.s" if "IA" in c or "ChatGPT" in c else c
+
+def _origem_linhas(L, base, ind=""):
+    """Origem agrupada por balde, com quebra por canal/campanha. base = total para o %."""
+    out = []
+    grupos = {}
+    for l in L:
+        grupos.setdefault(l.get("bucket") or "nao", []).append(l)
+    for b in sorted(grupos, key=lambda k: -len(grupos[k])):
+        arr = grupos[b]
+        out.append("%s%d · %s · %s" % (ind, len(arr), _BKT.get(b, b), _pct(len(arr), base)))
+        if b in ("trafego", "reativacao"):
+            sub = Counter((x.get("campanha") or "campanha não identificada") for x in arr)
+        elif b == "mkt":
+            sub = Counter(_canal_txt(x.get("canal")) for x in arr)
+        else:
+            sub = None
+        if sub and (len(sub) > 1 or b != "nao"):
+            for k, v in sub.most_common():
+                out.append("%s   %d · %s" % (ind, v, k))
+    return out
+
+def _raw_stage(o):
+    try:
+        st = (json.loads(o.get("raw") or "{}") or {}).get("stage") or {}
+        return st.get("order"), st.get("type")
+    except Exception:
+        return None, None
+
+def _funis(crm, d, db):
+    """{pipeline: [(etapa, qtd, ordem, fechado)]} + foto do dia gravada + foto anterior para a variacao."""
+    por = {}
+    for o in crm:
+        pz = o.get("pipeline") or "?"
+        et = o.get("estagio") or "?"
+        ordem, tipo = _raw_stage(o)
+        fech = tipo in ("won", "lost") or any(w in et.lower() for w in _FECHADO)
+        k = por.setdefault(pz, {})
+        if et not in k:
+            k[et] = [0, ordem if ordem is not None else 99, fech]
+        k[et][0] += 1
+    foto = {pz: {et: v[0] for et, v in ets.items()} for pz, ets in por.items()}
+    ant = {}
+    try:
+        db.collection(FOTO_COLL).document(_sp_now().date().isoformat()).set(
+            {"dia": _sp_now().date().isoformat(), "funis": foto, "gravado_em": _sp_now().isoformat(timespec="seconds")})
+        prev = (_sp_now().date() - dt.timedelta(days=1)).isoformat()
+        s = db.collection(FOTO_COLL).document(prev).get()
+        ant = (s.to_dict() or {}).get("funis") or {} if s.exists else {}
+    except Exception as ex:
+        print("[diario] foto funil:", ex, flush=True)
+    return por, ant
+
 def gerar(dia=None, gravar=True):
     db = _fw._get_db()
     if not db:
         return {"ok": False, "erro": "firestore indisponivel"}
+    import painel_mkt as _pm
     d = dia or (_sp_now().date() - dt.timedelta(days=1)).isoformat()
     dd = dt.date.fromisoformat(d)
+    mes_ini = dd.replace(day=1).isoformat()
+    aviso = []
     todos = [x.to_dict() or {} for x in db.collection("escuta_leads").stream()]
+    ficha = {l.get("fone"): l for l in todos if l.get("fone")}
     FORA = ("fornecedor_parceiro", "teste_interno", "equipe_interna", "spam", "sem_telefone")
-    fora = [l for l in todos if l.get("tipo_contato") in FORA]
-    leads = [l for l in todos if l.get("tipo_contato") not in FORA]   # fornecedor/teste/equipe/spam fora das contagens
+    leads = [l for l in todos if l.get("tipo_contato") not in FORA]
     crm = [x.to_dict() or {} for x in db.collection(os.environ.get("ESCUTA_CRM_COLL", "escuta_crm")).stream() if x.id != "mapa"]
     vendas = [x.to_dict() or {} for x in db.collection("escuta_vendas").stream()]
-    meta = (db.collection("escuta_meta").document(d).get().to_dict() or {}) if True else {}
+    meta = (db.collection("escuta_meta").document(d).get().to_dict() or {})
     term = (db.collection(os.environ.get("TERM_COLL", "escuta_termometro")).document("atual").get().to_dict() or {})
 
-    # ---- chegadas do dia
-    # chegada = conversa nova em que a PESSOA mandou mensagem (conversa so com automatica nao conta)
-    cheg = [l for l in leads if l.get("data_chegada_sp") == d and l.get("identidade") != "sem_telefone" and (l.get("msgs_lead") or 0) > 0]
-    novos = [l for l in cheg if l.get("identidade") != "cliente"]
-    clientes = [l for l in cheg if l.get("identidade") == "cliente"]
-    def _orig(l):
-        o = l.get("origem") or "Origem não informada"
-        return "Origem não informada" if ("<" in o or "parameter" in o or len(o) > 80) else o
-    por_origem = Counter(_orig(l) for l in novos)
-    trafego = sum(n for o, n in por_origem.items() if str(o).startswith("Tráfego pago"))
+    # ---- chegadas e origem: MESMO calculo do painel de Marketing
+    try:
+        P = _pm.montar(d, d)
+    except Exception as ex:
+        P = {"leads": [], "fora": []}
+        aviso.append("painel indisponível (%s)" % repr(ex)[:60])
+    try:
+        PM = _pm.pronto(mes_ini, d)
+    except Exception as ex:
+        PM = {"leads": []}
+        aviso.append("mês indisponível (%s)" % repr(ex)[:60])
+    L = P.get("leads") or []
+    F = P.get("fora") or []
+    cli = [f for f in F if str(f.get("motivo") or "").startswith("cliente da base")
+           and (ficha.get(f.get("fone")) or {}).get("data_chegada_sp") == d and ((ficha.get(f.get("fone")) or {}).get("msgs_lead") or 0) > 0]
+    conferir = [f for f in F if "legível" in str(f.get("motivo") or "")]
+    outros = [f for f in F if f not in cli and f not in conferir and not str(f.get("motivo") or "").startswith("cliente da base")]
+    trafego = sum(1 for l in L if l.get("bucket") in ("trafego", "reativacao"))
+
+    def _quem(fo):
+        f = ficha.get(fo) or {}
+        a = (f.get("conduta") or {}).get("atendente") or ((f.get("crm") or {}).get("vendedor")) or ""
+        return a.split()[0] if a else "sem atendente"
+
+    def _tel(fo):
+        fo = str(fo or "")
+        return "%s %s" % (fo[:2], fo[2:]) if len(fo) == 10 else fo
 
     # ---- meta
     gasto = float(meta.get("gasto_total") or 0)
     conv_meta = int(meta.get("conversas_iniciadas_total") or 0)
     cpl = (gasto / trafego) if trafego else None
 
-    # ---- CRM
-    criadas = [o for o in crm if _dia_ce(o.get("criado_em_ce")) == d]
-    mexidas = [o for o in crm if _dia_ce(o.get("atualizado_em_ce")) == d and o not in criadas]
-    et_criadas = Counter((o.get("estagio") or "?") for o in criadas)
-
-    # ---- orcamentos / vendas
+    # ---- orcamentos / vendas / perdidos / agendamentos
     orc_d = [v for v in vendas if _dia_ce(v.get("data")) == d]
     ganhos_d = [v for v in vendas if v.get("status") == "won" and (_dia_ce(v.get("atualizado_em_ce")) == d or _dia_ce(v.get("data")) == d)]
     itens = Counter(i.get("nome") for v in ganhos_d for i in (v.get("itens") or []) if isinstance(i, dict) and i.get("nome"))
+    perd_d = [o for o in crm if _dia_ce(o.get("atualizado_em_ce")) == d and "perdido" in str(o.get("estagio") or "").lower()]
+    ag_pres = ag_on = 0
+    try:
+        bks = _pm._bookings(d, d)
+        for fo, arr in (bks or {}).items():
+            for b in arr:
+                if str(b.get("criado") or "")[:10] == d and "avalia" in str(b.get("proc") or "").lower():
+                    if "on-line" in str(b.get("proc") or "").lower() or "online" in str(b.get("proc") or "").lower():
+                        ag_on += 1
+                    else:
+                        ag_pres += 1
+    except Exception as ex:
+        aviso.append("agenda indisponível")
+        print("[diario] bookings:", ex, flush=True)
 
-    # ---- furos (estado AGORA, para cobrar hoje)
+    # ---- funis do CRM (foto diaria para a variacao)
+    por, ant = _funis(crm, d, db)
+
+    # ---- furos que ja existiam (estado AGORA)
     ativos = [l for l in leads if l.get("identidade") not in ("cliente", "sem_telefone") and l.get("situacao_crm") != "perdido"]
     sem_resp_all = [l for l in leads if "lead_sem_resposta" in (l.get("furos") or []) and l.get("identidade") != "cliente"]
     sem_resp = sorted([l for l in sem_resp_all if (l.get("horas_desde_ultima") or 0) <= 48], key=lambda l: -(l.get("horas_desde_ultima") or 0))
     sem_resp_velhos = [l for l in sem_resp_all if (l.get("horas_desde_ultima") or 0) > 48]
     sem_resp_cli = [l for l in leads if "lead_sem_resposta" in (l.get("furos") or []) and l.get("identidade") == "cliente"]
-    sem_opp = [l for l in novos if "sem_oportunidade_no_crm" in (l.get("furos") or [])]
-    cidade = [l for l in ativos if "cidade_nao_perguntada" in (l.get("furos") or [])]
-    origem_np = [l for l in ativos if "origem_nao_perguntada" in (l.get("furos") or [])]
+    sem_opp = [l for l in L if not l.get("opp")]
     sem_tarefa = sorted([l for l in ativos if "oportunidade_sem_tarefa" in (l.get("furos") or [])],
                         key=lambda l: str(l.get("ultima_msg_em") or ""), reverse=True)
-    # nota de abordagem por atendente (conversas com movimento no dia)
     from collections import defaultdict as _dd
     _nt = _dd(list)
     for l in leads:
-        if l.get("nota") is not None and str(l.get("ultima_msg_em") or "")[:10] and \
-           _dia_ce(l.get("ultima_msg_em")) == d and (l.get("conduta") or {}).get("atendente"):
+        if l.get("nota") is not None and _dia_ce(l.get("ultima_msg_em")) == d and (l.get("conduta") or {}).get("atendente"):
             _nt[(l["conduta"]["atendente"]).split()[0]].append(float(l["nota"]))
     notas = sorted(((a, round(sum(v) / len(v), 1), len(v)) for a, v in _nt.items()), key=lambda x: -x[2])
-    t1 = [l["conduta"]["primeira_resposta_min"] for l in cheg if (l.get("conduta") or {}).get("primeira_resposta_min") is not None]
-    t1_med = sorted(t1)[len(t1) // 2] if t1 else None
+    t1 = [l.get("primeira_resp_min") for l in L if l.get("primeira_resp_min") is not None]
+    t1 = sorted(t1)
+    t1_med = t1[len(t1) // 2] if t1 else None
     lentos = sum(1 for x in t1 if x > 60)
 
-    def nomes(arr, n=5, horas=False):
-        out = []
-        for l in arr[:n]:
-            nm = (l.get("nome") or l.get("fone") or "?").strip()
-            out.append(nm + (" (%dh)" % int(l.get("horas_desde_ultima") or 0) if horas else ""))
-        return ", ".join(out) + (" +%d" % (len(arr) - n) if len(arr) > n else "")
-
-    # ---- saude
     try:
         import coletor as _c
-        sd = _c.saude()
-        alertas = sd.get("alertas") or []
+        alertas = _c.saude().get("alertas") or []
     except Exception as e:
         alertas = ["saude indisponivel: %s" % str(e)[:60]]
-
-    try:                                    # 30/10 passo 4: aviso do cracha da CliniChat
+    try:
         _ti = _fw.token_info()
         _hh = _ti.get("expira_em_horas")
         if _ti.get("vencido"):
             alertas.insert(0, "CRACHÁ DA CLINICHAT VENCIDO: renove já (nada novo entra no sistema)")
+            aviso.append("crachá vencido")
         elif _hh is not None and _hh <= 72:
             alertas.insert(0, "crachá da CliniChat vence em %d h: renove" % int(_hh))
     except Exception:
         pass
-    c = (term.get("contagem") or {})
-    L = []
-    L.append("*IDM · Diário comercial · %s %s*" % (DIAS_PT[dd.weekday()], dd.strftime("%d/%m")))
-    L.append("_gerado %s_" % _sp_now().strftime("%d/%m %H:%M"))
-    L.append("")
-    L.append("*📥 Chegadas:* %d conversas novas" % len(cheg))
-    L.append("• Leads: *%d*" % len(novos) + ("" if not novos else ": " + " · ".join("%s: %d" % (o, n) for o, n in por_origem.most_common())))
-    L.append("• Clientes que voltaram a falar: %d" % len(clientes))
+
+    # ================================================================ TEXTO
+    T = []
+    T.append("*IDM · Diário comercial · %s %s*" % (DIAS_PT[dd.weekday()], dd.strftime("%d/%m")))
+    T.append("_gerado %s_" % _sp_now().strftime("%d/%m %H:%M"))
+    if aviso:
+        T.append("⚠️ *Dados incompletos (%s): não usar para cobrança.*" % "; ".join(aviso))
+    T.append("")
+    T.append("*📥 Chegadas*")
+    T.append("%d · Leads novos" % len(L))
+    T.append("%d · Clientes que mandaram mensagem" % len(cli))
+    T.append("%d · Conferir (mensagem ilegível)" % len(conferir))
+    if outros:
+        T.append("%d · Outros (fora da conta)" % len(outros))
+    if L:
+        T.append("")
+        T.append("*🧭 Origem dos %d leads*" % len(L))
+        T += _origem_linhas(L, len(L))
+    T.append("")
+    T.append("*📅 Avaliações marcadas no dia*")
+    T.append("%d · Total" % (ag_pres + ag_on))
+    T.append("%d · Presencial" % ag_pres)
+    T.append("%d · On-line" % ag_on)
+    T.append("")
+    T.append("*💰 Resultado do dia*")
+    T.append("%d · Perdidos (funil LEADS)" % sum(1 for o in perd_d if str(o.get("pipeline") or "").upper().startswith("LEADS")))
+    T.append("%d · Orçamentos · %s" % (len(orc_d), _brl(sum(int(v.get("valor_centavos") or 0) for v in orc_d))))
+    T.append("%d · Vendas · %s" % (len(ganhos_d), _brl(sum(int(v.get("valor_centavos") or 0) for v in ganhos_d))))
+    for i, n in itens.most_common(4):
+        T.append("   %d · %s" % (n, i))
+    T.append("")
+    T.append("*📣 Meta Ads*")
     if meta:
-        L.append("*📣 Meta Ads (%s):* gasto %s · conversas iniciadas %d" % (dd.strftime("%d/%m"), _brl_reais(gasto), conv_meta) +
-                 (" · custo por lead (1ª msg de tráfego) %s" % _brl_reais(cpl) if cpl else (" · nenhum lead de tráfego pago identificado pela 1ª msg" if gasto else "")))
+        T.append("%s · Gasto" % _brl_reais(gasto))
+        T.append("%d · Conversas no Meta" % conv_meta)
+        T.append("%d · Chegaram pelo anúncio" % trafego)
+        if cpl:
+            T.append("%s · Custo por lead" % _brl_reais(cpl))
     else:
-        L.append("*📣 Meta Ads:* sem dado do dia (coletor ainda não gravou)")
-    _pc = Counter((l.get("campanha_tintim") or "campanha não identificada") for l in novos if str(l.get("origem_codigo") or "").startswith("trafego"))
-    if _pc:
-        L.append("• Tráfego pago por campanha: " + " · ".join("%s: %d" % (k, v) for k, v in _pc.most_common()))
-    if meta:
-        L.append("• Meta contou %d conversas · chegaram pelo anúncio: %d · sem marca do anúncio: %d" % (conv_meta, trafego, max(conv_meta - trafego, 0)))
-    L.append("*📊 CRM:* oportunidades abertas: %d" % len(criadas) +
-             ("" if not criadas else " (" + ", ".join("%s %d" % (e, n) for e, n in et_criadas.most_common()) + ")") +
-             " · movimentadas: %d" % len(mexidas))
-    L.append("*🧾 Orçamentos:* %d gerados (%s) · *vendas: %d (%s)*" % (len(orc_d), _brl(sum(int(v.get("valor_centavos") or 0) for v in orc_d)),
-             len(ganhos_d), _brl(sum(int(v.get("valor_centavos") or 0) for v in ganhos_d))) +
-             ("" if not itens else ": " + ", ".join("%s x%d" % (i, n) for i, n in itens.most_common(4))))
-    L.append("")
+        T.append("sem dado do dia (coletor ainda não gravou)")
+    # cobranca: sem origem
+    so = [l for l in L if l.get("bucket") == "nao"]
+    if so:
+        T.append("")
+        T.append("*🚨 Sem origem, cobrar (%d)*" % len(so))
+        for l in so:
+            fu = l.get("furos") or []
+            if "chegou por fora" in str(l.get("prova") or ""):
+                mot = "chegou por fora"
+            elif "origem_nao_perguntada" in fu:
+                mot = "não perguntou"
+            else:
+                mot = "perguntou, sem resposta"
+            T.append("• %s · %s · %s · %s" % ((l.get("nome") or "?").strip()[:28], _tel(l.get("fone")), _quem(l.get("fone")), mot))
+    if conferir:
+        T.append("")
+        T.append("*🔍 Conferir (%d)*" % len(conferir))
+        for f in conferir:
+            T.append("• %s · mensagem ilegível" % _tel(f.get("fone")))
+    if sem_opp:
+        T.append("")
+        T.append("*📋 Leads de ontem sem oportunidade no CRM (%d)*" % len(sem_opp))
+        for l in sem_opp:
+            T.append("• %s · %s · %s" % ((l.get("nome") or "?").strip()[:28], _tel(l.get("fone")), _quem(l.get("fone"))))
+    # funis
+    pipes = sorted(por.keys(), key=lambda p: next((i for i, k in enumerate(_ORDEM_PIPE) if p.upper().startswith(k)), 9))
+    for pz in pipes:
+        ets = por[pz]
+        abertas = [(et, v) for et, v in ets.items() if not v[2]]
+        tot = sum(v[0] for _, v in abertas)
+        T.append("")
+        T.append("*📊 Funil %s*" % pz)
+        T.append("%d · Em andamento" % tot)
+        prev = ant.get(pz) or {}
+        for et, v in sorted(abertas, key=lambda x: x[1][1]):
+            var = ""
+            if prev:
+                dlt = v[0] - int(prev.get(et) or 0)
+                var = " (%s%d)" % ("+" if dlt > 0 else "", dlt) if dlt else " (0)"
+            T.append("%d · %s · %s%s" % (v[0], et, _pct(v[0], tot), var))
+        fech_d = Counter(o.get("estagio") for o in crm if (o.get("pipeline") or "?") == pz
+                         and _dia_ce(o.get("atualizado_em_ce")) == d and (ets.get(o.get("estagio")) or [0, 0, False])[2])
+        if fech_d:
+            T.append("_Fechados no dia_")
+            for et, n in fech_d.most_common():
+                T.append("%d · %s" % (n, et))
+    # mes
+    LM = PM.get("leads") or []
+    if LM:
+        T.append("")
+        T.append("*📅 %s até ontem (leads)*" % ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto",
+                                                   "Setembro", "Outubro", "Novembro", "Dezembro"][dd.month - 1])
+        com = sum(1 for l in LM if l.get("opp"))
+        T.append("%d · Leads chegaram" % len(LM))
+        T.append("%d · Com oportunidade · %s" % (com, _pct(com, len(LM))))
+        T.append("%d · Sem oportunidade · %s" % (len(LM) - com, _pct(len(LM) - com, len(LM))))
+        T.append("_Origem_")
+        T += _origem_linhas(LM, len(LM))
+        cm = [o for o in crm if str(o.get("pipeline") or "").upper().startswith("LEADS") and str(_dia_ce(o.get("criado_em_ce")) or "") >= mes_ini]
+        if cm:
+            cnt = Counter(o.get("estagio") for o in cm)
+            g = sum(n for e, n in cnt.items() if "ganho" in str(e).lower())
+            p_ = sum(n for e, n in cnt.items() if "perdido" in str(e).lower())
+            q = sum(n for e, n in cnt.items() if "desqualif" in str(e).lower())
+            T.append("_Oportunidades do mês (funil LEADS)_")
+            T.append("%d · Criadas" % len(cm))
+            T.append("%d · Ganhos · %s" % (g, _pct(g, len(cm))))
+            T.append("%d · Perdidos · %s" % (p_, _pct(p_, len(cm))))
+            T.append("%d · Desqualificados · %s" % (q, _pct(q, len(cm))))
+            T.append("%d · Ainda abertas · %s" % (len(cm) - g - p_ - q, _pct(len(cm) - g - p_ - q, len(cm))))
+    # furos que ja existiam
     _at = list(term.get("atencao") or [])
     if _at:
-        L.append("*🚨 Atenção agora (%d)*" % len(_at))
+        T.append("")
+        T.append("*🚨 Atenção agora (%d)*" % len(_at))
         for _a in _at[:8]:
-            L.append("• %s: %s (%s)" % ((_a.get("nome") or "?").strip(), _a.get("problema"), str(_a.get("dono") or "sem dono").split()[0]))
+            T.append("• %s · %s · %s" % ((_a.get("nome") or "?").strip(), _a.get("problema"), str(_a.get("dono") or "sem dono").split()[0]))
         if len(_at) > 8:
-            L.append("• e mais %d no Painel de Leads" % (len(_at) - 8))
-        L.append("")
-    L.append("*🚨 Furos para cobrar hoje*")
-    L.append("• Leads esperando resposta (até 48h, agir hoje): *%d*" % len(sem_resp) + (": " + nomes(sem_resp, 6, True) if sem_resp else ""))
-    if sem_resp_velhos:
-        L.append("• Leads sem resposta há mais de 48h (esfriando): %d" % len(sem_resp_velhos))
-    if sem_resp_cli:
-        L.append("• Clientes esperando resposta: %d" % len(sem_resp_cli))
-    L.append("• Leads novos de ontem sem oportunidade no CRM: *%d*" % len(sem_opp) + (": " + nomes(sem_opp) if sem_opp else ""))
-    cid_d = [l for l in cidade if l.get("data_chegada_sp") == d]
-    ori_d = [l for l in origem_np if l.get("data_chegada_sp") == d]
-    L.append("• Nas chegadas de ontem: cidade/bairro não perguntados %d · origem não perguntada %d" % (len(cid_d), len(ori_d)))
-    L.append("• Leads em andamento SEM próximo passo (tarefa com data ou agendamento): *%d*" % len(sem_tarefa) + (": " + nomes(sem_tarefa, 6) if sem_tarefa else ""))
-    L.append("• Base ativa: cidade não perguntada %d · origem não perguntada %d" % (len(cidade), len(origem_np)))
-    _cad_hoje = {}
+            T.append("• e mais %d no Painel de Leads" % (len(_at) - 8))
+    T.append("")
+    T.append("*⏱️ Atendimento*")
+    T.append("%d · Leads esperando resposta (até 48h)" % len(sem_resp))
+    for l in sem_resp[:6]:
+        T.append("   %s · %dh" % ((l.get("nome") or l.get("fone") or "?").strip()[:28], int(l.get("horas_desde_ultima") or 0)))
+    T.append("%d · Leads sem resposta há mais de 48h" % len(sem_resp_velhos))
+    T.append("%d · Clientes esperando resposta" % len(sem_resp_cli))
+    T.append("%d · Leads em andamento sem próximo passo" % len(sem_tarefa))
+    if t1_med is not None:
+        T.append("%d min · 1ª resposta (mediana ontem)" % int(t1_med))
+        T.append("%d · 1ª resposta acima de 1h" % lentos)
     try:
         _hoje = _sp_now().date().isoformat()
         _cd = db.collection("escuta_cadencia").document(_hoje).get()
-        _co = db.collection("escuta_cadencia").document(d).get()
-        if _cd.exists or _co.exists:
-            L.append("")
-            L.append("*📌 Cadência: leads sem próximo passo no CRM*")
-            if _cd.exists:
-                _pd = (_cd.to_dict() or {}).get("por_dono") or {}
-                _cad_hoje.update(_pd)
-                L.append("• Hoje: " + (" · ".join("%s %d" % (k.split()[0], v) for k, v in sorted(_pd.items(), key=lambda x: -x[1])) or "nenhum"))
-            if _co.exists:
-                _cf = ((_co.to_dict() or {}).get("conferencia") or {})
-                if _cf.get("total"):
-                    L.append("• Ontem resolvidos: %d de %d" % (_cf.get("resolvidos", 0), _cf["total"]) +
-                             " (" + " · ".join("%s %d/%d" % (k.split()[0], v["resolvidos"], v["total"]) for k, v in (_cf.get("por_dono") or {}).items()) + ")" +
-                             (" · %d com tarefa SEM descrição" % _cf["sem_descricao"] if _cf.get("sem_descricao") else ""))
+        if _cd.exists:
+            _pd = (_cd.to_dict() or {}).get("por_dono") or {}
+            T.append("")
+            T.append("*📌 Cadência: leads sem próximo passo hoje*")
+            for k, v in sorted(_pd.items(), key=lambda x: -x[1]):
+                T.append("%d · %s" % (v, k.split()[0]))
     except Exception as _ex:
         print("[diario] cadencia:", _ex, flush=True)
-    if fora:
-        _cf = Counter(l.get("tipo_contato") for l in fora if l.get("data_chegada_sp") == d)
-        if _cf:
-            L.append("_fora da conta ontem: " + ", ".join("%s %d" % (k.replace("_", " "), v) for k, v in _cf.items()) + "_")
-    if t1_med is not None:
-        L.append("• 1ª resposta (mediana ontem): %d min · %d acima de 1h" % (int(t1_med), lentos))
     if notas:
-        L.append("")
-        L.append("*⭐ Nota de abordagem (0 a 6), conversas de ontem*")
-        L.append("• " + " · ".join("%s %s (%d)" % (a, str(n).replace(".", ","), q) for a, n, q in notas[:6]))
-    L.append("")
+        T.append("")
+        T.append("*⭐ Nota de abordagem (0 a 6), conversas de ontem*")
+        for a, n, q in notas[:6]:
+            T.append("%s · %s (%d conversas)" % (str(n).replace(".", ","), a, q))
+    c = (term.get("contagem") or {})
     if c:
-        L.append("*🌡️ Termômetro agora:* 🔥 %d · 🌤️ %d · ❄️ %d · 💰 %d cross-sell" % (c.get("quente", 0), c.get("morno", 0), c.get("frio", 0), c.get("cross_sell", 0)))
-    try:
-        _et = db.collection("escuta_etiquetas").document(d).get()
-        if _et.exists:
-            _pe = (_et.to_dict() or {}).get("por_etiqueta") or {}
-            if _pe:
-                L.append("🏷️ Etiquetas colocadas pelo sistema ontem: %d (%s)" % (sum(_pe.values()), ", ".join("%s %d" % (k, v) for k, v in _pe.items())))
-    except Exception:
-        pass
-    L.append("Saúde: " + ("✅ todas as fontes OK" if not alertas else "⚠️ " + " | ".join(alertas[:3])))
-    L.append("")
-    L.append("_Responda *ok* para manter este canal aberto._")
-    texto = "\n".join(L)
+        T.append("")
+        T.append("*🌡️ Termômetro agora*")
+        T.append("%d · Quentes" % c.get("quente", 0))
+        T.append("%d · Mornos" % c.get("morno", 0))
+        T.append("%d · Frios" % c.get("frio", 0))
+        T.append("%d · Cross-sell" % c.get("cross_sell", 0))
+    T.append("")
+    T.append("Saúde: " + ("✅ todas as fontes OK" if not alertas else "⚠️ " + " | ".join(alertas[:3])))
+    T.append("")
+    T.append("_Responda *ok* para manter este canal aberto._")
+    texto = "\n".join(T)
 
-    dados = {"dia": d, "chegadas": len(cheg), "leads_novos": len(novos), "clientes_voltaram": len(clientes),
-             "por_origem": dict(por_origem), "trafego_pago_1a_msg": trafego, "meta_gasto": gasto, "meta_conversas": conv_meta,
-             "cpl": cpl, "opps_criadas": len(criadas), "opps_movimentadas": len(mexidas), "orcamentos": len(orc_d),
-             "vendas": len(ganhos_d), "notas_atendente": [{"atendente": a, "nota": n, "conversas": q} for a, n, q in notas],
+    por_origem = Counter(_BKT.get(l.get("bucket"), l.get("bucket")) for l in L)
+    dados = {"dia": d, "versao": 2, "chegadas": len(L) + len(cli), "leads_novos": len(L), "clientes_voltaram": len(cli),
+             "conferir": len(conferir), "outros": len(outros), "por_origem": dict(por_origem), "trafego_pago_1a_msg": trafego,
+             "meta_gasto": gasto, "meta_conversas": conv_meta, "cpl": cpl, "orcamentos": len(orc_d), "vendas": len(ganhos_d),
+             "avaliacoes_presencial": ag_pres, "avaliacoes_online": ag_on,
+             "notas_atendente": [{"atendente": a, "nota": n, "conversas": q} for a, n, q in notas],
              "sem_resposta": len(sem_resp), "sem_resposta_48h_mais": len(sem_resp_velhos), "sem_oportunidade": len(sem_opp),
-             "cidade_nao_perguntada": len(cidade), "origem_nao_perguntada": len(origem_np), "sem_tarefa": len(sem_tarefa),
-             "t1_mediana_min": t1_med, "t1_acima_1h": lentos, "alertas": alertas,
-             # 30/10: campos para a IMAGEM do diario
-             "sem_tarefa_nomes": nomes(sem_tarefa, 5) if sem_tarefa else "", "sem_resposta_nomes": nomes(sem_resp, 3, True) if sem_resp else "",
+             "sem_tarefa": len(sem_tarefa), "t1_mediana_min": t1_med, "t1_acima_1h": lentos, "alertas": alertas, "aviso": aviso,
+             "sem_tarefa_nomes": ", ".join((l.get("nome") or "?").strip() for l in sem_tarefa[:5]),
+             "sem_resposta_nomes": ", ".join((l.get("nome") or "?").strip() for l in sem_resp[:3]),
              "sem_resposta_clientes": len(sem_resp_cli), "termometro": dict(c), "termometro_pendentes": dict(term.get("pendentes") or {}),
-             "cadencia_hoje": dict(_cad_hoje),
-             "atencao": [{"nome": a.get("nome"), "problema": a.get("problema")} for a in (term.get("atencao") or [])][:8],
-             # 30/10: origem completa para a imagem
-             "leads_lista": [{"nome": (l.get("nome") or l.get("fone") or "?").strip()[:28], "origem": _orig(l),
-                              "campanha": (l.get("campanha_tintim") or "")[:34],
-                              "etapa": ((l.get("crm") or {}).get("estagio") or ("sem oportunidade" if l.get("situacao_crm") == "sem_oportunidade" else "?"))}
-                             for l in novos][:12],
-             "por_campanha": dict(Counter((l.get("campanha_tintim") or "campanha não identificada") for l in novos
-                                          if str(l.get("origem_codigo") or "").startswith("trafego"))),
-             "nao_informada": sum(1 for l in novos if l.get("origem_codigo") == "nao_informada"),
-             "nao_informada_perguntou": sum(1 for l in novos if l.get("origem_codigo") == "nao_informada"
-                                            and (l.get("conduta") or {}).get("perguntou_origem")),
+             "cadencia_hoje": {}, "atencao": [{"nome": a.get("nome"), "problema": a.get("problema")} for a in _at][:8],
+             "leads_lista": [{"nome": (l.get("nome") or l.get("fone") or "?").strip()[:28], "origem": _BKT.get(l.get("bucket"), ""),
+                              "campanha": (l.get("campanha") or "")[:34], "etapa": l.get("etapa") or ("sem oportunidade" if not l.get("opp") else "?")}
+                             for l in L][:12],
+             "por_campanha": dict(Counter((l.get("campanha") or "campanha não identificada") for l in L if l.get("bucket") in ("trafego", "reativacao"))),
+             "nao_informada": sum(1 for l in L if l.get("bucket") == "nao"),
+             "nao_informada_perguntou": sum(1 for l in L if l.get("bucket") == "nao" and "origem_nao_perguntada" not in (l.get("furos") or [])),
              "orcamentos_centavos": sum(int(v.get("valor_centavos") or 0) for v in orc_d),
              "vendas_centavos": sum(int(v.get("valor_centavos") or 0) for v in ganhos_d),
              "vendas_itens": ["%s x%d" % (i, n) for i, n in itens.most_common(4)]}
     if gravar:
         db.collection(COLL).document(d).set({"dia": d, "texto": texto, "dados": dados, "status": "previa",
                                              "gerado_em": _sp_now().isoformat(timespec="seconds")})
-    print("[diario] %s gerado (%d chegadas, %d sem resposta)" % (d, len(cheg), len(sem_resp)), flush=True)
+    print("[diario] v2 %s gerado (%d leads, %d sem origem)" % (d, len(L), len(so)), flush=True)
     return {"ok": True, "dia": d, "texto": texto, "dados": dados}
+
 
 def ler(dia=None):
     db = _fw._get_db()

@@ -9,6 +9,7 @@ import motor_cruzamento as _cruz
 import motor_fila as mf
 
 COLL_LEADS, COLL_CRM, COLL_VENDAS, COLL_OVR = "escuta_leads", "escuta_crm", "escuta_vendas", "mkt_origem_override"
+_PIPE_BASE = ("BLACK FRIDAY", "CLIENTES ATIVOS")   # funis de quem ja e paciente: contato ali nao e lead novo (15/11)
 WA_CAP = ("CAM 04", "CAM 06", "CAM 07", "CAM 08")   # captacao por WhatsApp; CAM 09 = reativacao
 CONTRATO = 4000.0
 BUCKETS = [("trafego", "Tráfego — Captação"), ("reativacao", "Tráfego — Remarketing (reativação de base)"), ("mkt", "Orgânico"),
@@ -135,6 +136,8 @@ def classifica(l, ovr):
     ia = {k: _limpa(v) for k, v in (l.get("ia") or {}).items()}
     if o.get("bucket"):
         return o["bucket"], o.get("canal"), (o.get("prova") or "informada pela gestão") + " (correção manual)"
+    if l.get("tipo_manual") and l.get("tipo_contato") in _FORA:
+        return None, "fora da conta (%s, marcado pela gestão)" % l.get("tipo_contato"), None
     if l.get("interno") or ia.get("tipo_contato") in _FORA:
         return None, "fora da conta (%s)" % (ia.get("tipo_contato") or "interno"), None
     txt1 = l.get("primeira_msg_lead") or ""
@@ -203,7 +206,8 @@ def _abertura(fo, ch):
         for x in ref.collection("msgs_" + ch[:7]).stream():
             m = x.to_dict() or {}
             if m.get("de") in ("lead", "equipe"):
-                ms.append((str(m.get("data")), m.get("de"), m.get("tipo")))
+                _vazio = (m.get("tipo") in (None, "text")) and not (m.get("texto") or "").strip()
+                ms.append((str(m.get("data")), m.get("de"), "unsupported" if _vazio else m.get("tipo")))
                 if m.get("de") == "lead" and (m.get("texto") or "").strip():
                     tx.append((str(m.get("data")), m.get("texto").strip()))
         ms.sort(); tx.sort()
@@ -251,6 +255,9 @@ def montar(de, ate, versao="gestao"):
         o_ = ovr.get(fo) or {}
         if (ganhou_antes or (_cruz._eh_comprador(fo) and not opp_lead)) and not o_.get("bucket"):
             fora.append({"fone": fo, "nome": l.get("nome"), "motivo": "cliente da base"}); continue
+        _base = sorted({(o.get("pipeline") or "") for o in ops if (o.get("pipeline") or "").upper().startswith(_PIPE_BASE)})
+        if _base and not opp_lead and not o_.get("bucket"):
+            fora.append({"fone": fo, "nome": l.get("nome"), "motivo": "cliente da base (funil %s)" % ", ".join(_base)}); continue
         quem, legivel, txt = None, True, ""
         via_crm = False
         sem_cod = (l.get("origem_codigo") or "nao_informada") == "nao_informada"

@@ -511,6 +511,8 @@ def enviar(texto, fone=None):
 def imagem(r):
     """PNG do diario a partir do resultado de gerar()."""
     import diario_img as _di
+    if (r.get("dados") or {}).get("versao") == 2:     # 15/11: imagem desenhada a partir do texto v2 (mesmo padrao visual)
+        return _di.render_v2(r.get("dados") or {}, r.get("texto") or "", r["dia"], "Gerado %s · dados do banco do IDM" % _sp_now().strftime("%d/%m às %H:%M"))
     return _di.render(r.get("dados") or {}, r["dia"], "Gerado %s · dados do banco do IDM" % _sp_now().strftime("%d/%m às %H:%M"))
 
 def _multipart(campos, arq_nome, arq_bytes, mime):

@@ -275,3 +275,159 @@ def render(dados, dia_iso, gerado_txt=""):
     buf = io.BytesIO()
     img.save(buf, "PNG", optimize=True)
     return buf.getvalue()
+
+
+# ============================================================================ v2 (15/11/2026)
+# Mesmo padrao visual (cabecalho verde, cards brancos, fontes Inter), conteudo = TEXTO do Diario v2.
+# Desenha a partir do texto para imagem e texto nunca divergirem.
+import re as _re
+
+_RX_LIN = _re.compile(r"^(?P<ind>\s*)(?P<num>[^·•_*]+?) · (?P<lab>.+?)(?: · (?P<pct>\d+)%)?(?: \((?P<var>[+-]?\d+)\))?$")
+_EMO = _re.compile("[\U0001F300-\U0001FAFF☀-➿️]")
+_PULA = ("_gerado", "_Responda", "Saúde:")
+
+def _limpa(t):
+    return _EMO.sub("", t).replace("*", "").strip()
+
+def _blocos(texto):
+    """[(titulo, [linhas])] a partir do texto do Diario."""
+    out, cur = [], None
+    for ln in (texto or "").split("\n"):
+        s = ln.rstrip()
+        if not s.strip() or s.strip().startswith(_PULA) or s.startswith("*IDM"):
+            continue
+        if s.startswith("*") and s.endswith("*") and not s.startswith("* "):
+            cur = (_limpa(s), [])
+            out.append(cur)
+            continue
+        if cur is None:
+            cur = ("", [])
+            out.append(cur)
+        cur[1].append(s)
+    return out
+
+def _tom(titulo):
+    t = titulo.lower()
+    if "cobrar" in t or "atenção" in t or "sem oportunidade" in t:
+        return BAD, SOFT["bad"]
+    if "conferir" in t or "atendimento" in t or "cadência" in t:
+        return MID, None
+    return None, None
+
+def render_v2(dados, texto, dia_iso, gerado_txt=""):
+    import datetime as _dt
+    dd = _dt.date.fromisoformat(dia_iso)
+    img = Image.new("RGB", (W, 9000), BG)
+    d = ImageDraw.Draw(img)
+    y = PAD
+    # cabecalho (mesmo padrao)
+    d.rounded_rectangle([PAD, y, W - PAD, y + 190], radius=28, fill=BRAND)
+    d.text((PAD + 40, y + 32), "IDM  ·  DIÁRIO COMERCIAL", font=_font("s", 22), fill=(190, 214, 207))
+    d.text((PAD + 40, y + 66), "%s, %s" % (DIAS[dd.weekday()], dd.strftime("%d/%m")), font=_font("b", 54), fill=(255, 255, 255))
+    d.text((PAD + 40, y + 140), gerado_txt or "dados do banco do IDM", font=_font("r", 21), fill=(190, 214, 207))
+    y += 190 + 18
+    if dados.get("aviso"):
+        h = 70
+        d.rounded_rectangle([PAD, y, W - PAD, y + h], radius=22, fill=SOFT["bad"])
+        d.text((PAD + 30, y + 20), corta_global(d, "Dados incompletos: não usar para cobrança (%s)" % "; ".join(dados["aviso"]), W - 2 * PAD - 60),
+               font=_font("s", 22), fill=BAD)
+        y += h + 18
+    # KPIs (mesmo padrao)
+    kw = (W - 2 * PAD - 3 * 16) // 4
+    t1 = dados.get("t1_mediana_min")
+    kpis = [("Leads novos", str(dados.get("leads_novos", 0)), FG, "%d cliente(s) · %d a conferir" % (dados.get("clientes_voltaram", 0), dados.get("conferir", 0))),
+            ("Sem origem", str(dados.get("nao_informada", 0)), BAD if dados.get("nao_informada") else OK, "cobrar a equipe"),
+            ("Avaliações", str((dados.get("avaliacoes_presencial") or 0) + (dados.get("avaliacoes_online") or 0)), FG,
+             "%d presencial · %d on-line" % (dados.get("avaliacoes_presencial") or 0, dados.get("avaliacoes_online") or 0)),
+            ("Vendas", str(dados.get("vendas", 0)), OK if dados.get("vendas") else BAD, "%d orçamento(s)" % dados.get("orcamentos", 0))]
+    for i, (lab, val, cor, sub) in enumerate(kpis):
+        x = PAD + i * (kw + 16)
+        d.rounded_rectangle([x, y, x + kw, y + 170], radius=22, fill=CARD)
+        d.text((x + 22, y + 22), lab, font=_font("s", 21), fill=MUT)
+        fv = _font("b", 50 if d.textlength(val, font=_font("b", 50)) < kw - 40 else 38)
+        d.text((x + 22, y + 56), val, font=fv, fill=cor)
+        for j, ln in enumerate(_wrap(d, sub, _font("r", 18), kw - 40)[:2]):
+            d.text((x + 22, y + 118 + j * 22), ln, font=_font("r", 18), fill=MUT)
+    y += 170 + 18
+
+    ROW, SUB, BUL, SUBT = 46, 34, 34, 36
+    for titulo, linhas in _blocos(texto):
+        if titulo.startswith("Chegadas"):
+            pass
+        cor_b, fundo = _tom(titulo)
+        # mede
+        h = 80
+        for ln in linhas:
+            s = ln.strip()
+            if s.startswith("•"):
+                h += BUL * len(_wrap(d, _limpa(s[1:]), _font("r", 21), W - 2 * PAD - 100))
+            elif s.startswith("_"):
+                h += SUBT
+            elif ln.startswith("   "):
+                h += SUB
+            else:
+                h += ROW
+        h += 14
+        d.rounded_rectangle([PAD, y, W - PAD, y + h], radius=22, fill=fundo or CARD)
+        if cor_b and not fundo:
+            d.rounded_rectangle([PAD, y, PAD + 10, y + h], radius=5, fill=cor_b)
+        d.text((PAD + 30, y + 24), titulo, font=_font("b", 27), fill=cor_b if fundo else FG)
+        yy = y + 76
+        for ln in linhas:
+            s = ln.strip()
+            if s.startswith("•"):
+                for k, w in enumerate(_wrap(d, _limpa(s[1:]), _font("r", 21), W - 2 * PAD - 100)):
+                    d.text((PAD + 40, yy), ("• " if k == 0 else "  ") + w, font=_font("r", 21), fill=FG)
+                    yy += BUL
+                continue
+            if s.startswith("_"):
+                d.text((PAD + 30, yy + 6), s.strip("_"), font=_font("s", 20), fill=MUT)
+                yy += SUBT
+                continue
+            m = _RX_LIN.match(ln)
+            sub = ln.startswith("   ")
+            if not m:
+                d.text((PAD + (60 if sub else 30), yy + 4), corta_global(d, _limpa(s), W - 2 * PAD - 80), font=_font("r", 21), fill=FG)
+                yy += SUB if sub else ROW
+                continue
+            num, lab, pct, var = m.group("num").strip(), _limpa(m.group("lab")), m.group("pct"), m.group("var")
+            if sub:
+                d.text((PAD + 70, yy + 2), num, font=_font("s", 19), fill=MUT)
+                d.text((PAD + 130, yy + 2), corta_global(d, lab, W - 2 * PAD - 180), font=_font("r", 19), fill=MUT)
+                yy += SUB
+                continue
+            fn = _font("b", 28)
+            d.text((PAD + 30, yy), num, font=fn, fill=cor_b or FG)
+            x0 = PAD + 30 + max(90, int(d.textlength(num, font=fn)) + 22)
+            if pct is not None:
+                labw = 330
+                d.text((x0, yy + 4), corta_global(d, lab, labw), font=_font("s", 21), fill=FG)
+                bx0, bx1 = x0 + labw + 16, W - PAD - 160
+                d.rounded_rectangle([bx0, yy + 8, bx1, yy + 30], radius=11, fill=SOFT["bar"])
+                p = int(pct)
+                cor = MID if "Sem origem" in lab else (BRAND if "Tráfego" in lab else OK)
+                if p:
+                    d.rounded_rectangle([bx0, yy + 8, bx0 + max(22, int((bx1 - bx0) * p / 100.0)), yy + 30], radius=11, fill=cor)
+                pt = "%d%%" % p
+                d.text((W - PAD - 150, yy + 3), pt, font=_font("s", 21), fill=FG)
+                if var is not None:
+                    v = int(var)
+                    vt = ("+%d" % v) if v > 0 else str(v)
+                    d.text((W - PAD - 30 - d.textlength(vt, font=_font("s", 21)), yy + 3), vt, font=_font("s", 21),
+                           fill=OK if v > 0 else (BAD if v < 0 else MUT))
+            else:
+                d.text((x0, yy + 4), corta_global(d, lab, W - x0 - PAD - 30), font=_font("s", 22), fill=FG)
+            yy += ROW
+        y += h + 18
+
+    al = dados.get("alertas") or []
+    saude = "Todas as fontes OK" if not al else ("Atenção: " + str(al[0])[:60])
+    d.ellipse([PAD + 6, y + 10, PAD + 22, y + 26], fill=OK if not al else BAD)
+    d.text((PAD + 32, y + 4), saude, font=_font("r", 20), fill=MUT)
+    r = "Responda ok para manter o canal aberto"
+    d.text((W - PAD - 6 - d.textlength(r, font=_font("r", 20)), y + 4), r, font=_font("r", 20), fill=MUT)
+    y += 48
+    img = img.crop((0, 0, W, y))
+    buf = io.BytesIO()
+    img.save(buf, "PNG", optimize=True)
+    return buf.getvalue()
